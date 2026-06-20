@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  postgres:
+    image: postgres:16
+    container_name: pm_system_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pm_system
+    ports:
+      - "5432:5432"
+    volumes:
+      - pm_pgdata:/var/lib/postgresql/data
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+volumes:
+  pm_pgdata:
