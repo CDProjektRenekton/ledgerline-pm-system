@@ -50,6 +50,11 @@ build all from one GitHub repo, and it auto-redeploys whenever you push.
    cd backend
    DATABASE_URL="<connection string from Render dashboard>" npm run seed
    ```
+8. (Optional) To enable real assignment emails instead of console-only
+   logging, add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and
+   `FROM_EMAIL` as environment variables on the `pm-system-backend` service
+   (Environment tab → Add Environment Variable), then redeploy. See
+   `backend/.env.example` for a Gmail example.
 
 Your app is now live at the frontend's `.onrender.com` URL.
 

@@ -43,6 +43,38 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS teams (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#1F6F78',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (team_id, user_id)
+);
+
+-- Adds the team-assignment column to a tasks table that may already exist
+-- in a previously-deployed database (CREATE TABLE IF NOT EXISTS above
+-- would otherwise skip it silently).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_team_id INTEGER;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE constraint_name = 'tasks_assignee_team_id_fkey'
+  ) THEN
+    ALTER TABLE tasks
+      ADD CONSTRAINT tasks_assignee_team_id_fkey
+      FOREIGN KEY (assignee_team_id) REFERENCES teams(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS labels (
   id SERIAL PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -86,6 +118,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(assignee_team_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);

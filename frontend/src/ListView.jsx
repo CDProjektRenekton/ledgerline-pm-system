@@ -1,5 +1,5 @@
 import React from "react";
-import { Calendar, MessageSquare } from "lucide-react";
+import { Calendar, MessageSquare, Users } from "lucide-react";
 
 const STATUS_LABEL = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
 const PRIORITY_COLOR = { high: "#9C4221", medium: "#C9A227", low: "#5C7A89" };
@@ -23,6 +23,7 @@ export default function ListView({ tasks, onSelect }) {
         .pm-pill { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; color: #fff; display: inline-block; }
         .pm-pri-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
         .pm-table-avatar { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 9.5px; font-weight: 700; }
+        .pm-list-team { display:inline-flex; align-items:center; gap:4px; padding: 3px 8px; border-radius: 999px; color:#fff; font-size: 10.5px; font-weight: 700; }
       `}</style>
       <table className="pm-table">
         <thead>
@@ -49,7 +50,11 @@ export default function ListView({ tasks, onSelect }) {
                 {t.priority.charAt(0).toUpperCase() + t.priority.slice(1)}
               </td>
               <td>
-                {t.assignee_initials ? (
+                {t.assignee_team_id ? (
+                  <span className="pm-list-team" style={{ background: t.team_color }}>
+                    <Users size={10} /> {t.team_name}
+                  </span>
+                ) : t.assignee_initials ? (
                   <span className="pm-table-avatar" style={{ background: t.assignee_color }}>{t.assignee_initials}</span>
                 ) : (
                   <span style={{ color: "var(--muted)" }}>Unassigned</span>

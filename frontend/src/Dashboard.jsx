@@ -13,12 +13,14 @@ import {
   LogOut,
   Upload,
   Trash2,
+  Users,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
 import ListView from "./ListView.jsx";
 import CalendarView from "./CalendarView.jsx";
 import TimelineView from "./TimelineView.jsx";
+import TeamsPanel from "./TeamsPanel.jsx";
 
 const COLUMNS = [
   { id: "todo", label: "To Do", no: "01", accent: "#8B8680" },
@@ -39,6 +41,8 @@ export default function Dashboard({ token, user, onLogout }) {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [members, setMembers] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [showTeamsPanel, setShowTeamsPanel] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [activeView, setActiveView] = useState("kanban");
   const [selectedTask, setSelectedTask] = useState(null);
@@ -106,22 +110,30 @@ export default function Dashboard({ token, user, onLogout }) {
     })();
   }, [token]);
 
-  // Load tasks + members whenever the active project changes
+  // Load tasks + members + teams whenever the active project changes
   useEffect(() => {
     if (!activeProject) return;
     (async () => {
       try {
-        const [taskList, memberList] = await Promise.all([
+        const [taskList, memberList, teamList] = await Promise.all([
           api.listTasks(token, activeProject.id),
           api.listMembers(token, activeProject.id),
+          api.listTeams(token, activeProject.id),
         ]);
         setTasks(taskList);
         setMembers(memberList);
+        setTeams(teamList);
       } catch (err) {
         setError(err.message);
       }
     })();
   }, [activeProject, token]);
+
+  const refreshTeams = async () => {
+    if (!activeProject) return;
+    const teamList = await api.listTeams(token, activeProject.id);
+    setTeams(teamList);
+  };
 
   // Load comments + attachments when a task is opened
   useEffect(() => {
@@ -304,6 +316,7 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-card-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
         .pm-card-meta-item { display: flex; align-items: center; gap: 3px; }
         .pm-card-avatar { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 9.5px; font-weight: 700; }
+        .pm-card-team { display:flex; align-items:center; gap:4px; padding: 3px 8px; border-radius: 999px; color:#fff; font-size: 10px; font-weight: 700; max-width: 130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .pm-quickadd { padding: 4px 2px 2px; }
         .pm-quickadd input { width: 100%; box-sizing:border-box; border: 1px dashed var(--border); background: transparent; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
         .pm-quickadd input:focus { border-color: var(--gold); background: var(--card); }
@@ -360,6 +373,15 @@ export default function Dashboard({ token, user, onLogout }) {
           />
           <button onClick={createProject}>+</button>
         </div>
+
+        {activeProject && (
+          <>
+            <div className="pm-sidebar-section">Workspace</div>
+            <div className="pm-proj-item" onClick={() => setShowTeamsPanel(true)}>
+              <Users size={13} /> Teams {teams.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{teams.length}</span>}
+            </div>
+          </>
+        )}
 
         <div style={{ marginTop: "auto", padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 9 }}>
           <div className="pm-avatar" style={{ background: user.color, marginLeft: 0, border: "none" }}>{user.initials}</div>
@@ -441,9 +463,13 @@ export default function Dashboard({ token, user, onLogout }) {
                             {Number(t.comment_count) > 0 && <span className="pm-card-meta-item"><MessageSquare size={11} /> {t.comment_count}</span>}
                             {Number(t.attachment_count) > 0 && <span className="pm-card-meta-item"><Paperclip size={11} /> {t.attachment_count}</span>}
                           </div>
-                          {t.assignee_initials && (
+                          {t.assignee_team_id ? (
+                            <div className="pm-card-team" style={{ background: t.team_color }} title={t.team_name}>
+                              <Users size={10} /> {t.team_name}
+                            </div>
+                          ) : t.assignee_initials ? (
                             <div className="pm-card-avatar" style={{ background: t.assignee_color }}>{t.assignee_initials}</div>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     ))}
@@ -474,6 +500,17 @@ export default function Dashboard({ token, user, onLogout }) {
         )}
       </div>
 
+      {showTeamsPanel && activeProject && (
+        <TeamsPanel
+          token={token}
+          project={activeProject}
+          members={members}
+          teams={teams}
+          onTeamsChanged={refreshTeams}
+          onClose={() => setShowTeamsPanel(false)}
+        />
+      )}
+
       {selectedTask && (
         <div className="pm-overlay" onClick={() => setSelectedTask(null)}>
           <div className="pm-panel" onClick={(e) => e.stopPropagation()}>
@@ -501,11 +538,25 @@ export default function Dashboard({ token, user, onLogout }) {
             <div className="pm-field-label">Assignee</div>
             <select
               className="pm-select"
-              value={selectedTask.assignee_id || ""}
-              onChange={(e) => patchTask(selectedTask.id, { assigneeId: Number(e.target.value) || null })}
+              value={selectedTask.assignee_team_id ? `team-${selectedTask.assignee_team_id}` : selectedTask.assignee_id ? `user-${selectedTask.assignee_id}` : ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (!val) patchTask(selectedTask.id, { assigneeId: null, assigneeTeamId: null });
+                else if (val.startsWith("team-")) patchTask(selectedTask.id, { assigneeTeamId: Number(val.slice(5)) });
+                else patchTask(selectedTask.id, { assigneeId: Number(val.slice(5)) });
+              }}
             >
               <option value="">Unassigned</option>
-              {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {members.length > 0 && (
+                <optgroup label="People">
+                  {members.map((m) => <option key={`u${m.id}`} value={`user-${m.id}`}>{m.name}</option>)}
+                </optgroup>
+              )}
+              {teams.length > 0 && (
+                <optgroup label="Teams">
+                  {teams.map((t) => <option key={`t${t.id}`} value={`team-${t.id}`}>{t.name} ({t.members.length})</option>)}
+                </optgroup>
+              )}
             </select>
 
             <div className="pm-field-label">Due date</div>

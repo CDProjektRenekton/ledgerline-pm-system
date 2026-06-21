@@ -50,6 +50,15 @@ export const api = {
   listMembers: (token, projectId) => request(`/projects/${projectId}/members`, { token }),
   listNotifications: (token) => request("/notifications", { token }),
 
+  listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
+  createTeam: (token, projectId, name, color) =>
+    request("/teams", { method: "POST", body: { projectId, name, color }, token }),
+  deleteTeam: (token, id) => request(`/teams/${id}`, { method: "DELETE", token }),
+  addTeamMember: (token, teamId, userId) =>
+    request(`/teams/${teamId}/members`, { method: "POST", body: { userId }, token }),
+  removeTeamMember: (token, teamId, userId) =>
+    request(`/teams/${teamId}/members/${userId}`, { method: "DELETE", token }),
+
   listAttachments: (token, taskId) => request(`/attachments?taskId=${taskId}`, { token }),
   deleteAttachment: (token, id) => request(`/attachments/${id}`, { method: "DELETE", token }),
   uploadAttachment: async (token, taskId, file) => {

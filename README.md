@@ -79,8 +79,17 @@ Demo login after seeding: `jister@example.com` / `password123`
 | GET    | /api/attachments?taskId=ID        | List attachments on a task    |
 | POST   | /api/attachments (multipart)      | Upload a file (field: `file`, `taskId`) |
 | DELETE | /api/attachments/:id              | Delete an attachment          |
+| GET    | /api/teams?projectId=ID           | List teams (with members)     |
+| POST   | /api/teams                        | Create team                   |
+| DELETE | /api/teams/:id                    | Delete team                   |
+| POST   | /api/teams/:id/members            | Add a member (body: `userId`) |
+| DELETE | /api/teams/:id/members/:userId    | Remove a member               |
 
 All routes except `/api/auth/*` require `Authorization: Bearer <token>`.
+
+`POST /api/tasks` and `PATCH /api/tasks/:id` accept either `assigneeId` (a
+user) or `assigneeTeamId` (a team) — setting one clears the other. Sending
+`assigneeId: null` (and/or `assigneeTeamId: null`) unassigns the task.
 
 ### Real-time events (Socket.io)
 
@@ -119,6 +128,8 @@ API call and persists in Postgres.
 - Task detail panel with live comments
 - **File attachments**: real upload/download/delete (stored on disk, served at `/uploads/...`)
 - **Real-time sync**: Socket.io — task creates/updates/deletes and new comments broadcast instantly to every connected client viewing that project (open the app in two tabs to see it)
+- **Teams**: group project members into named teams (sidebar → Teams), then assign a task to a team instead of one person — every team member gets notified
+- **Email notifications**: assigning a task (to a person or a team) sends an email via SMTP. If `SMTP_HOST` isn't configured, emails are logged to the console instead — see `backend/.env.example` for setup with Gmail or any transactional provider (Resend, SendGrid, Mailgun, Postmark)
 - Background scheduler for due/overdue notifications (hourly job, writes to `notifications` table)
 - Quick-add tasks per column
 

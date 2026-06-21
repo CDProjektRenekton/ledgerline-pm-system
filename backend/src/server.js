@@ -11,6 +11,7 @@ const commentRoutes = require("./routes/comments");
 const labelRoutes = require("./routes/labels");
 const notificationRoutes = require("./routes/notifications");
 const attachmentRoutes = require("./routes/attachments");
+const teamRoutes = require("./routes/teams");
 const { startScheduler } = require("./jobs/dueDateScheduler");
 const socket = require("./socket");
 
@@ -28,6 +29,7 @@ app.use("/api/comments", commentRoutes);
 app.use("/api/labels", labelRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/attachments", attachmentRoutes);
+app.use("/api/teams", teamRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 app.use((err, req, res, next) => {
