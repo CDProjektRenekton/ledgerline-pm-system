@@ -15,6 +15,9 @@ function init(server, corsOrigin) {
     socket.on("leave-project", (projectId) => {
       socket.leave(`project:${projectId}`);
     });
+    socket.on("join-user", (userId) => {
+      socket.join(`user:${userId}`);
+    });
   });
 
   return ioInstance;
@@ -25,4 +28,9 @@ function emitToProject(projectId, event, payload) {
   ioInstance.to(`project:${projectId}`).emit(event, payload);
 }
 
-module.exports = { init, emitToProject };
+function emitToUser(userId, event, payload) {
+  if (!ioInstance) return;
+  ioInstance.to(`user:${userId}`).emit(event, payload);
+}
+
+module.exports = { init, emitToProject, emitToUser };

@@ -13,10 +13,25 @@ router.get("/", async (req, res) => {
   res.json(result.rows);
 });
 
+router.get("/unread-count", async (req, res) => {
+  const result = await db.query(
+    `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false`,
+    [req.user.id]
+  );
+  res.json({ count: Number(result.rows[0].count) });
+});
+
 router.patch("/:id/read", async (req, res) => {
   const { id } = req.params;
   await db.query(`UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2`, [
     id,
+    req.user.id,
+  ]);
+  res.json({ ok: true });
+});
+
+router.patch("/read-all", async (req, res) => {
+  await db.query(`UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false`, [
     req.user.id,
   ]);
   res.json({ ok: true });

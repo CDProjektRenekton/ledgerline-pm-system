@@ -47,21 +47,51 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Add a member to a project
+// Add a member to a project — by userId, or by email (looks up the account).
 router.post("/:id/members", async (req, res) => {
   const { id } = req.params;
-  const { userId, role } = req.body;
+  const { userId, email, role } = req.body;
   try {
+    let targetUserId = userId;
+    if (!targetUserId && email) {
+      const userResult = await db.query("SELECT id FROM users WHERE email = $1", [email.trim().toLowerCase()]);
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({ error: "No account found with that email. They'll need to create one first." });
+      }
+      targetUserId = userResult.rows[0].id;
+    }
+    if (!targetUserId) return res.status(400).json({ error: "userId or email is required" });
+
     await db.query(
       `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)
        ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-      [id, userId, role || "member"]
+      [id, targetUserId, role || "member"]
     );
-    res.status(201).json({ ok: true });
+
+    const memberResult = await db.query(
+      `SELECT u.id, u.name, u.email, u.initials, u.color, pm.role
+       FROM project_members pm JOIN users u ON u.id = pm.user_id
+       WHERE pm.project_id = $1 AND pm.user_id = $2`,
+      [id, targetUserId]
+    );
+    res.status(201).json(memberResult.rows[0]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to add member" });
   }
+});
+
+router.delete("/:id/members/:userId", async (req, res) => {
+  const { id, userId } = req.params;
+  const membership = await db.query(
+    "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+    [id, userId]
+  );
+  if (membership.rows.length > 0 && membership.rows[0].role === "owner") {
+    return res.status(400).json({ error: "Can't remove the project owner" });
+  }
+  await db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [id, userId]);
+  res.json({ ok: true });
 });
 
 router.get("/:id/members", async (req, res) => {

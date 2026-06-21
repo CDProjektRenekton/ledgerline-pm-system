@@ -1,31 +1,60 @@
 import React, { useState } from "react";
 import { api, setToken } from "./api";
 
-export default function Login({ onAuthed }) {
-  const [mode, setMode] = useState("login"); // login | register
+export default function Login({ onAuthed, resetToken }) {
+  const [mode, setMode] = useState(resetToken ? "reset" : "login"); // login | register | forgot | reset
   const [name, setName] = useState("");
   const [email, setEmail] = useState("jister@example.com");
   const [password, setPassword] = useState("password123");
+  const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
     setError("");
+    setInfo("");
     setLoading(true);
     try {
-      const data =
-        mode === "login"
-          ? await api.login(email, password)
-          : await api.register(name, email, password);
-      setToken(data.token);
-      onAuthed(data.token, data.user);
+      if (mode === "login") {
+        const data = await api.login(email, password);
+        setToken(data.token);
+        onAuthed(data.token, data.user);
+      } else if (mode === "register") {
+        const data = await api.register(name, email, password);
+        setToken(data.token);
+        onAuthed(data.token, data.user);
+      } else if (mode === "forgot") {
+        const res = await api.forgotPassword(email);
+        setInfo(res.message);
+      } else if (mode === "reset") {
+        await api.resetPassword(resetToken, newPassword);
+        setInfo("Password updated. You can now log in.");
+        // Clear the token out of the URL and drop back to the login form.
+        window.history.replaceState({}, "", window.location.pathname);
+        setTimeout(() => setMode("login"), 1200);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
   };
+
+  const subtitle = {
+    login: "Sign in to your workspace",
+    register: "Create your workspace account",
+    forgot: "We'll email you a reset link",
+    reset: "Choose a new password",
+  }[mode];
+
+  const buttonLabel = {
+    login: "Sign in",
+    register: "Create account",
+    forgot: "Send reset link",
+    reset: "Update password",
+  }[mode];
 
   return (
     <div style={styles.root}>
@@ -35,9 +64,7 @@ export default function Login({ onAuthed }) {
       <div style={styles.card}>
         <div style={styles.mark}>L</div>
         <h1 style={styles.title}>Ledgerline</h1>
-        <p style={styles.subtitle}>
-          {mode === "login" ? "Sign in to your workspace" : "Create your workspace account"}
-        </p>
+        <p style={styles.subtitle}>{subtitle}</p>
 
         <form onSubmit={submit}>
           {mode === "register" && (
@@ -49,51 +76,81 @@ export default function Login({ onAuthed }) {
               required
             />
           )}
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            style={styles.input}
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+
+          {(mode === "login" || mode === "register" || mode === "forgot") && (
+            <input
+              style={styles.input}
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          )}
+
+          {(mode === "login" || mode === "register") && (
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          )}
+
+          {mode === "reset" && (
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="New password (min 8 characters)"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={8}
+            />
+          )}
+
           {error && <div style={styles.error}>{error}</div>}
+          {info && <div style={styles.info}>{info}</div>}
+
           <button style={styles.button} type="submit" disabled={loading}>
-            {loading ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+            {loading ? "Please wait…" : buttonLabel}
           </button>
         </form>
 
         <div style={styles.switchRow}>
-          {mode === "login" ? (
-            <span>
-              No account?{" "}
-              <a style={styles.link} onClick={() => setMode("register")}>
-                Create one
-              </a>
-            </span>
-          ) : (
+          {mode === "login" && (
+            <>
+              <span>
+                No account?{" "}
+                <a style={styles.link} onClick={() => setMode("register")}>Create one</a>
+              </span>
+              <div style={{ marginTop: 6 }}>
+                <a style={styles.link} onClick={() => setMode("forgot")}>Forgot password?</a>
+              </div>
+            </>
+          )}
+          {mode === "register" && (
             <span>
               Already have an account?{" "}
-              <a style={styles.link} onClick={() => setMode("login")}>
-                Sign in
-              </a>
+              <a style={styles.link} onClick={() => setMode("login")}>Sign in</a>
+            </span>
+          )}
+          {(mode === "forgot" || mode === "reset") && (
+            <span>
+              <a style={styles.link} onClick={() => setMode("login")}>Back to sign in</a>
             </span>
           )}
         </div>
 
-        <div style={styles.hint}>
-          Demo login (after running <code>npm run seed</code> on the backend):
-          <br />
-          <code>jister@example.com</code> / <code>password123</code>
-        </div>
+        {mode === "login" && (
+          <div style={styles.hint}>
+            Demo login (after running <code>npm run seed</code> on the backend):
+            <br />
+            <code>jister@example.com</code> / <code>password123</code>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -158,6 +215,7 @@ const styles = {
     marginTop: 4,
   },
   error: { color: "#9C4221", fontSize: 12.5, marginBottom: 10 },
+  info: { color: "#3F7D52", fontSize: 12.5, marginBottom: 10 },
   switchRow: { textAlign: "center", fontSize: 12.5, marginTop: 16, color: "#5C5747" },
   link: { color: "#1F6F78", fontWeight: 600, cursor: "pointer" },
   hint: {

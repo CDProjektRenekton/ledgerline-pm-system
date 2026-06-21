@@ -42,9 +42,11 @@ build all from one GitHub repo, and it auto-redeploys whenever you push.
    ```
    and trigger a manual redeploy (env vars only take effect on a fresh build
    for static sites).
-6. On the backend service, set `CORS_ORIGIN` to your frontend's URL (e.g.
-   `https://pm-system-frontend-xxxx.onrender.com`) instead of `*`, and
-   redeploy, so only your frontend can call the API.
+6. On the backend service, set `CORS_ORIGIN` **and** `FRONTEND_URL` to your
+   frontend's URL (e.g. `https://pm-system-frontend-xxxx.onrender.com`)
+   instead of the defaults, and redeploy. `FRONTEND_URL` is what gets used
+   to build the link inside password-reset emails, so it needs to point at
+   your real frontend.
 7. Seed demo data once, from your own machine, pointing at the live database:
    ```bash
    cd backend

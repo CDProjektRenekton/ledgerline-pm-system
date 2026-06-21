@@ -19,6 +19,8 @@ services:
         value: "*"
       - key: PORT
         value: "4000"
+      - key: FRONTEND_URL
+        value: https://pm-system-frontend.onrender.com
 
   - type: web
     name: pm-system-frontend

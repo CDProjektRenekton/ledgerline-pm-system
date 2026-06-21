@@ -14,6 +14,8 @@ import {
   Upload,
   Trash2,
   Users,
+  UserCog,
+  Clock,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
@@ -21,6 +23,8 @@ import ListView from "./ListView.jsx";
 import CalendarView from "./CalendarView.jsx";
 import TimelineView from "./TimelineView.jsx";
 import TeamsPanel from "./TeamsPanel.jsx";
+import MembersPanel from "./MembersPanel.jsx";
+import NotificationBell from "./NotificationBell.jsx";
 
 const COLUMNS = [
   { id: "todo", label: "To Do", no: "01", accent: "#8B8680" },
@@ -43,10 +47,12 @@ export default function Dashboard({ token, user, onLogout }) {
   const [members, setMembers] = useState([]);
   const [teams, setTeams] = useState([]);
   const [showTeamsPanel, setShowTeamsPanel] = useState(false);
+  const [showMembersPanel, setShowMembersPanel] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [activeView, setActiveView] = useState("kanban");
   const [selectedTask, setSelectedTask] = useState(null);
   const [comments, setComments] = useState([]);
+  const [history, setHistory] = useState([]);
   const [newComment, setNewComment] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -55,15 +61,19 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newProjectName, setNewProjectName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const dragTaskId = useRef(null);
+  const dragOverInfo = useRef(null); // { columnId, targetTaskId, before }
   const socketRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Real-time connection: join the active project's room and react to
-  // task/comment events from other clients (or other browser tabs).
+  // Real-time connection: join the active project's room (+ this user's
+  // personal room) and react to task/comment/notification events.
   useEffect(() => {
     const socket = io(API_ORIGIN, { transports: ["websocket", "polling"] });
     socketRef.current = socket;
+    socket.on("connect", () => socket.emit("join-user", user.id));
 
     socket.on("task:created", (task) => {
       setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [...prev, { ...task, labels: [] }]));
@@ -75,6 +85,18 @@ export default function Dashboard({ token, user, onLogout }) {
     socket.on("task:deleted", ({ id }) => {
       setTasks((prev) => prev.filter((t) => t.id !== id));
     });
+    socket.on("tasks:reordered", ({ status, orderedIds }) => {
+      setTasks((prev) => {
+        const others = prev.filter((t) => !orderedIds.includes(t.id));
+        const reordered = orderedIds
+          .map((id, i) => {
+            const t = prev.find((x) => x.id === id);
+            return t ? { ...t, status, position: i } : null;
+          })
+          .filter(Boolean);
+        return [...others, ...reordered];
+      });
+    });
     socket.on("comment:created", ({ taskId, comment }) => {
       setSelectedTask((cur) => {
         if (cur && cur.id === taskId) {
@@ -85,9 +107,13 @@ export default function Dashboard({ token, user, onLogout }) {
         return cur;
       });
     });
+    socket.on("notification:new", (n) => {
+      setNotifications((prev) => [n, ...prev].slice(0, 50));
+      setUnreadCount((c) => c + 1);
+    });
 
     return () => socket.disconnect();
-  }, []);
+  }, [user.id]);
 
   useEffect(() => {
     if (!activeProject || !socketRef.current) return;
@@ -109,6 +135,42 @@ export default function Dashboard({ token, user, onLogout }) {
       }
     })();
   }, [token]);
+
+  // Load the notification inbox once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const [list, unread] = await Promise.all([
+          api.listNotifications(token),
+          api.unreadNotificationCount(token),
+        ]);
+        setNotifications(list);
+        setUnreadCount(unread.count);
+      } catch (err) {
+        // non-fatal — bell just stays empty
+      }
+    })();
+  }, [token]);
+
+  const markNotificationRead = async (id) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
+    setUnreadCount((c) => Math.max(0, c - 1));
+    try {
+      await api.markNotificationRead(token, id);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    setUnreadCount(0);
+    try {
+      await api.markAllNotificationsRead(token);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   // Load tasks + members + teams whenever the active project changes
   useEffect(() => {
@@ -135,21 +197,30 @@ export default function Dashboard({ token, user, onLogout }) {
     setTeams(teamList);
   };
 
-  // Load comments + attachments when a task is opened
+  const refreshMembers = async () => {
+    if (!activeProject) return;
+    const memberList = await api.listMembers(token, activeProject.id);
+    setMembers(memberList);
+  };
+
+  // Load comments + attachments + history when a task is opened
   useEffect(() => {
     if (!selectedTask) {
       setComments([]);
       setAttachments([]);
+      setHistory([]);
       return;
     }
     (async () => {
       try {
-        const [c, a] = await Promise.all([
+        const [c, a, h] = await Promise.all([
           api.listComments(token, selectedTask.id),
           api.listAttachments(token, selectedTask.id),
+          api.taskHistory(token, selectedTask.id),
         ]);
         setComments(c);
         setAttachments(a);
+        setHistory(h);
       } catch (err) {
         setError(err.message);
       }
@@ -170,6 +241,44 @@ export default function Dashboard({ token, user, onLogout }) {
       setError(err.message);
       refreshTasks();
     }
+  };
+
+  const reorderTasks = async (status, orderedIds) => {
+    setTasks((prev) => {
+      const others = prev.filter((t) => !orderedIds.includes(t.id));
+      const reordered = orderedIds.map((id, i) => {
+        const t = prev.find((x) => x.id === id);
+        return { ...t, status, position: i };
+      });
+      return [...others, ...reordered];
+    });
+    try {
+      await api.reorderTasks(token, activeProject.id, status, orderedIds);
+    } catch (err) {
+      setError(err.message);
+      refreshTasks();
+    }
+  };
+
+  // Dropping directly on a card reorders within that column (or moves +
+  // inserts at a precise spot if dragged from another column).
+  const handleCardDrop = (e, columnId, targetTask) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = dragTaskId.current;
+    if (!draggedId || draggedId === targetTask.id) return;
+
+    const colTasks = tasks.filter((t) => t.status === columnId);
+    const ids = colTasks.map((t) => t.id).filter((id) => id !== draggedId);
+    const targetIndex = ids.indexOf(targetTask.id);
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    const insertAt = before ? targetIndex : targetIndex + 1;
+    ids.splice(insertAt, 0, draggedId);
+
+    reorderTasks(columnId, ids);
+    setDragOverCol(null);
   };
 
   const addTask = async (status, title) => {
@@ -279,6 +388,11 @@ export default function Dashboard({ token, user, onLogout }) {
     return <div style={{ padding: 40, fontFamily: "Inter, sans-serif" }}>Loading workspace…</div>;
   }
 
+  const activityFeed = [
+    ...history.map((h) => ({ kind: "history", ...h })),
+    ...comments.map((c) => ({ kind: "comment", ...c })),
+  ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
   return (
     <div className="pm-root">
       <style>{`
@@ -356,6 +470,10 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-textarea { resize: vertical; min-height: 64px; }
         .pm-delete-btn { margin-top: 22px; color: #9C4221; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
         .pm-comment { border-top: 1px solid var(--border); padding: 10px 0; }
+        .pm-activity-row { display:flex; align-items:flex-start; gap: 7px; padding: 6px 0; }
+        .pm-activity-icon { color: var(--muted); margin-top: 3px; flex-shrink: 0; }
+        .pm-activity-detail { font-size: 12px; color: #5C5747; }
+        .pm-activity-time { font-size: 10.5px; color: var(--muted); }
         .pm-comment-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
         .pm-comment-avatar { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:9px; font-weight:700; }
         .pm-comment-name { font-size:12px; font-weight:600; }
@@ -404,6 +522,9 @@ export default function Dashboard({ token, user, onLogout }) {
         {activeProject && (
           <>
             <div className="pm-sidebar-section">Workspace</div>
+            <div className="pm-proj-item" onClick={() => setShowMembersPanel(true)}>
+              <UserCog size={13} /> Members {members.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{members.length}</span>}
+            </div>
             <div className="pm-proj-item" onClick={() => setShowTeamsPanel(true)}>
               <Users size={13} /> Teams {teams.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{teams.length}</span>}
             </div>
@@ -435,6 +556,13 @@ export default function Dashboard({ token, user, onLogout }) {
                   <div key={m.id} className="pm-avatar" style={{ background: m.color }} title={m.name}>{m.initials}</div>
                 ))}
               </div>
+              <NotificationBell
+                token={token}
+                notifications={notifications}
+                unreadCount={unreadCount}
+                onMarkRead={markNotificationRead}
+                onMarkAllRead={markAllNotificationsRead}
+              />
               <button className="pm-btn-primary" onClick={() => addTask("todo", "New task")} disabled={!activeProject}>
                 <Plus size={15} /> New Task
               </button>
@@ -476,7 +604,15 @@ export default function Dashboard({ token, user, onLogout }) {
 
                   <div className="pm-cards">
                     {colTasks.map((t) => (
-                      <div key={t.id} className="pm-card" draggable onDragStart={() => (dragTaskId.current = t.id)} onClick={() => setSelectedTask(t)}>
+                      <div
+                        key={t.id}
+                        className="pm-card"
+                        draggable
+                        onDragStart={() => (dragTaskId.current = t.id)}
+                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        onDrop={(e) => handleCardDrop(e, col.id, t)}
+                        onClick={() => setSelectedTask(t)}
+                      >
                         <div className="pm-flag" style={{ background: PRIORITY_COLOR[t.priority] }} title={`${t.priority} priority`} />
                         <Trash2
                           size={12}
@@ -534,6 +670,17 @@ export default function Dashboard({ token, user, onLogout }) {
           </div>
         )}
       </div>
+
+      {showMembersPanel && activeProject && (
+        <MembersPanel
+          token={token}
+          project={activeProject}
+          members={members}
+          currentUser={user}
+          onMembersChanged={refreshMembers}
+          onClose={() => setShowMembersPanel(false)}
+        />
+      )}
 
       {showTeamsPanel && activeProject && (
         <TeamsPanel
@@ -611,17 +758,30 @@ export default function Dashboard({ token, user, onLogout }) {
               <Upload size={13} /> {uploading ? "Uploading…" : "Upload file"}
             </div>
 
-            <div className="pm-field-label">Comments</div>
-            {comments.map((c) => (
-              <div className="pm-comment" key={c.id}>
-                <div className="pm-comment-head">
-                  <div className="pm-comment-avatar" style={{ background: c.author_color }}>{c.author_initials}</div>
-                  <span className="pm-comment-name">{c.author_name}</span>
-                  <span className="pm-comment-time">{new Date(c.created_at).toLocaleString()}</span>
+            <div className="pm-field-label">Activity</div>
+            {activityFeed.length === 0 && (
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>No activity yet.</div>
+            )}
+            {activityFeed.map((item) =>
+              item.kind === "history" ? (
+                <div className="pm-activity-row" key={`h${item.id}`}>
+                  <Clock size={11} className="pm-activity-icon" />
+                  <div>
+                    <span className="pm-activity-detail">{item.detail}</span>
+                    <span className="pm-activity-time"> · {new Date(item.created_at).toLocaleString()}</span>
+                  </div>
                 </div>
-                <div className="pm-comment-body">{c.body}</div>
-              </div>
-            ))}
+              ) : (
+                <div className="pm-comment" key={`c${item.id}`}>
+                  <div className="pm-comment-head">
+                    <div className="pm-comment-avatar" style={{ background: item.author_color }}>{item.author_initials}</div>
+                    <span className="pm-comment-name">{item.author_name}</span>
+                    <span className="pm-comment-time">{new Date(item.created_at).toLocaleString()}</span>
+                  </div>
+                  <div className="pm-comment-body">{item.body}</div>
+                </div>
+              )
+            )}
             <div className="pm-comment-add">
               <input placeholder="Write a comment…" value={newComment} onChange={(e) => setNewComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment()} />
               <button className="pm-btn-primary" onClick={postComment}>Post</button>

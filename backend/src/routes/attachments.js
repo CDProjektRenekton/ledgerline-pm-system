@@ -4,6 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { logHistory } = require("../history");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -45,6 +46,7 @@ router.post("/", upload.single("file"), async (req, res) => {
     `INSERT INTO attachments (task_id, filename, url, uploaded_by) VALUES ($1,$2,$3,$4) RETURNING *`,
     [taskId, req.file.originalname, url, req.user.id]
   );
+  await logHistory(taskId, req.user.id, "attachment_added", `Attached "${req.file.originalname}"`);
   res.status(201).json(result.rows[0]);
 });
 

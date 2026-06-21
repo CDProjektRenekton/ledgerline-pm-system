@@ -49,7 +49,23 @@ export const api = {
     request("/comments", { method: "POST", body: { taskId, body }, token }),
 
   listMembers: (token, projectId) => request(`/projects/${projectId}/members`, { token }),
+  inviteMember: (token, projectId, email) =>
+    request(`/projects/${projectId}/members`, { method: "POST", body: { email }, token }),
+  removeMember: (token, projectId, userId) =>
+    request(`/projects/${projectId}/members/${userId}`, { method: "DELETE", token }),
+
   listNotifications: (token) => request("/notifications", { token }),
+  unreadNotificationCount: (token) => request("/notifications/unread-count", { token }),
+  markNotificationRead: (token, id) => request(`/notifications/${id}/read`, { method: "PATCH", token }),
+  markAllNotificationsRead: (token) => request("/notifications/read-all", { method: "PATCH", token }),
+
+  taskHistory: (token, taskId) => request(`/tasks/${taskId}/history`, { token }),
+  reorderTasks: (token, projectId, status, orderedIds) =>
+    request("/tasks/reorder", { method: "POST", body: { projectId, status, orderedIds }, token }),
+
+  forgotPassword: (email) => request("/auth/forgot-password", { method: "POST", body: { email } }),
+  resetPassword: (token, newPassword) =>
+    request("/auth/reset-password", { method: "POST", body: { token, newPassword } }),
 
   listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
   createTeam: (token, projectId, name, color) =>

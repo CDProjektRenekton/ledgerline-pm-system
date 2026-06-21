@@ -1,14 +1,16 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { emitToProject } = require("../socket");
+const { emitToProject, emitToUser } = require("../socket");
 const { sendAssignmentEmail } = require("../email");
+const { logHistory } = require("../history");
 
 const router = express.Router();
 router.use(requireAuth);
 
 const STATUSES = ["todo", "inprogress", "review", "done"];
 const PRIORITIES = ["low", "medium", "high"];
+const STATUS_LABEL = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
 
 async function attachLabels(tasks) {
   if (tasks.length === 0) return tasks;
@@ -27,22 +29,23 @@ async function attachLabels(tasks) {
   return tasks.map((t) => ({ ...t, labels: byTask[t.id] || [] }));
 }
 
-// Records a notification row and fires off an (async, non-blocking) email
-// for a single user being assigned a task.
+// Records a notification row, pushes it over the socket to that user in
+// real time, and fires an (async, non-blocking) assignment email.
 async function notifyAssignment(userId, task, assignedByName) {
   const userResult = await db.query("SELECT name, email FROM users WHERE id = $1", [userId]);
   if (userResult.rows.length === 0) return;
   const user = userResult.rows[0];
 
-  await db.query(
-    `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1,$2,'assigned',$3)`,
-    [userId, task.id, `You were assigned: "${task.title}"`]
+  const message = `You were assigned: "${task.title}"`;
+  const notifResult = await db.query(
+    `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1,$2,'assigned',$3) RETURNING *`,
+    [userId, task.id, message]
   );
+  emitToUser(userId, "notification:new", notifResult.rows[0]);
 
   const projResult = await db.query("SELECT name FROM projects WHERE id = $1", [task.project_id]);
   const projectName = projResult.rows[0] ? projResult.rows[0].name : "a project";
 
-  // Fire-and-forget so a slow/misconfigured mail server never blocks the API response.
   sendAssignmentEmail({
     to: user.email,
     recipientName: user.name,
@@ -57,6 +60,17 @@ async function notifyTeamAssignment(teamId, task, assignedByName) {
   for (const row of members.rows) {
     await notifyAssignment(row.user_id, task, assignedByName);
   }
+}
+
+async function nameForUser(userId) {
+  if (!userId) return null;
+  const r = await db.query("SELECT name FROM users WHERE id = $1", [userId]);
+  return r.rows[0] ? r.rows[0].name : "someone";
+}
+async function nameForTeam(teamId) {
+  if (!teamId) return null;
+  const r = await db.query("SELECT name FROM teams WHERE id = $1", [teamId]);
+  return r.rows[0] ? r.rows[0].name : "a team";
 }
 
 // List tasks for a project (board view), with assignee/team + label info
@@ -102,10 +116,65 @@ router.post("/", async (req, res) => {
   const task = result.rows[0];
   emitToProject(projectId, "task:created", task);
 
+  await logHistory(task.id, req.user.id, "created", `${req.user.name} created this task`);
+  if (finalAssigneeId) {
+    const n = await nameForUser(finalAssigneeId);
+    await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to ${n}`);
+  }
+  if (finalTeamId) {
+    const n = await nameForTeam(finalTeamId);
+    await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to team ${n}`);
+  }
+
   if (finalAssigneeId) notifyAssignment(finalAssigneeId, task, req.user.name).catch(() => {});
   if (finalTeamId) notifyTeamAssignment(finalTeamId, task, req.user.name).catch(() => {});
 
   res.status(201).json(task);
+});
+
+// Full activity trail for a task: every status/priority/assignee/due-date
+// change since creation, newest last.
+router.get("/:id/history", async (req, res) => {
+  const { id } = req.params;
+  const result = await db.query(
+    `SELECT h.*, u.name AS actor_name, u.initials AS actor_initials, u.color AS actor_color
+     FROM task_history h LEFT JOIN users u ON u.id = h.actor_id
+     WHERE h.task_id = $1 ORDER BY h.created_at ASC`,
+    [id]
+  );
+  res.json(result.rows);
+});
+
+// Reorder tasks within (or into) a column. Body: { projectId, status, orderedIds: [id, ...] }
+router.post("/reorder", async (req, res) => {
+  const { projectId, status, orderedIds } = req.body;
+  if (!projectId || !status || !Array.isArray(orderedIds)) {
+    return res.status(400).json({ error: "projectId, status, and orderedIds[] are required" });
+  }
+  if (!STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${STATUSES.join(", ")}` });
+  }
+
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (let i = 0; i < orderedIds.length; i++) {
+      await client.query(
+        `UPDATE tasks SET position = $1, status = $2, updated_at = now() WHERE id = $3 AND project_id = $4`,
+        [i, status, orderedIds[i], projectId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error(err);
+    return res.status(500).json({ error: "Failed to reorder tasks" });
+  } finally {
+    client.release();
+  }
+
+  emitToProject(projectId, "tasks:reordered", { status, orderedIds });
+  res.json({ ok: true });
 });
 
 // Update a task. Reads the existing row first so that an explicit `null`
@@ -157,12 +226,43 @@ router.patch("/:id", async (req, res) => {
   const task = result.rows[0];
   emitToProject(task.project_id, "task:updated", task);
 
+  // --- Activity trail: log every field that actually changed ---
+  if ("title" in body && existing.title !== task.title) {
+    await logHistory(task.id, req.user.id, "title_changed", `Title changed to "${task.title}"`);
+  }
+  if ("description" in body && existing.description !== task.description) {
+    await logHistory(task.id, req.user.id, "description_changed", `Description updated`);
+  }
+  if ("status" in body && existing.status !== task.status) {
+    await logHistory(task.id, req.user.id, "status_changed", `Status changed from "${STATUS_LABEL[existing.status]}" to "${STATUS_LABEL[task.status]}"`);
+  }
+  if ("priority" in body && existing.priority !== task.priority) {
+    await logHistory(task.id, req.user.id, "priority_changed", `Priority changed from ${existing.priority} to ${task.priority}`);
+  }
+  if ("dueDate" in body && String(existing.due_date) !== String(task.due_date)) {
+    const dateLabel = task.due_date ? new Date(task.due_date).toISOString().slice(0, 10) : null;
+    await logHistory(task.id, req.user.id, "due_date_changed", dateLabel ? `Due date set to ${dateLabel}` : "Due date cleared");
+  }
+  if (("assigneeId" in body && existing.assignee_id !== task.assignee_id) ||
+      ("assigneeTeamId" in body && existing.assignee_team_id !== task.assignee_team_id)) {
+    if (task.assignee_id) {
+      const n = await nameForUser(task.assignee_id);
+      await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to ${n}`);
+    } else if (task.assignee_team_id) {
+      const n = await nameForTeam(task.assignee_team_id);
+      await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to team ${n}`);
+    } else {
+      await logHistory(task.id, req.user.id, "assignee_changed", `Unassigned`);
+    }
+  }
+
   // Status-change notification for whoever's currently assigned
   if (body.status && task.assignee_id) {
-    await db.query(
-      `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1, $2, 'status_change', $3)`,
-      [task.assignee_id, task.id, `Task "${task.title}" moved to ${body.status}`]
+    const notifResult = await db.query(
+      `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1, $2, 'status_change', $3) RETURNING *`,
+      [task.assignee_id, task.id, `Task "${task.title}" moved to ${STATUS_LABEL[body.status]}`]
     );
+    emitToUser(task.assignee_id, "notification:new", notifResult.rows[0]);
   }
 
   // New-assignment notification + email (only fires when the assignment actually changed)
