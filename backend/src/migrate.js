@@ -7,7 +7,12 @@ const { Pool } = require("pg");
 
 async function migrate() {
   const sql = fs.readFileSync(path.join(__dirname, "..", "schema.sql"), "utf8");
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const connectionString = process.env.DATABASE_URL || "";
+  const isLocal = /localhost|127\.0\.0\.1/.test(connectionString);
+  const pool = new Pool({
+    connectionString,
+    ssl: isLocal ? false : { rejectUnauthorized: false },
+  });
   try {
     await pool.query(sql);
     console.log("✓ Schema applied");
