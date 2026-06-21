@@ -255,6 +255,26 @@ export default function Dashboard({ token, user, onLogout }) {
     }
   };
 
+  const removeProject = async (e, project) => {
+    e.stopPropagation(); // don't also trigger "select project"
+    const confirmed = window.confirm(
+      `Delete "${project.name}"? This permanently deletes all of its tasks, comments, and teams. This can't be undone.`
+    );
+    if (!confirmed) return;
+    try {
+      await api.deleteProject(token, project.id);
+      setProjects((prev) => {
+        const remaining = prev.filter((p) => p.id !== project.id);
+        if (activeProject && activeProject.id === project.id) {
+          setActiveProject(remaining[0] || null);
+        }
+        return remaining;
+      });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: 40, fontFamily: "Inter, sans-serif" }}>Loading workspace…</div>;
   }
@@ -277,6 +297,9 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-sidebar-section { padding: 16px 20px 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #8E8B83; }
         .pm-proj-item { margin: 2px 12px; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; cursor: pointer; color: #D8D5CC; }
         .pm-proj-item.active { background: rgba(255,255,255,0.08); color: #fff; }
+        .pm-proj-del { flex-shrink: 0; opacity: 0; color: #9B988F; cursor: pointer; }
+        .pm-proj-item:hover .pm-proj-del { opacity: 1; }
+        .pm-proj-del:hover { color: #E08A6B; }
         .pm-proj-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink:0; }
         .pm-proj-add { display:flex; gap:6px; margin: 8px 12px; }
         .pm-proj-add input { flex:1; min-width:0; background: rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#fff; border-radius:6px; padding:6px 8px; font-size:12px; outline:none; }
@@ -309,6 +332,9 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-card { background: var(--card); border-radius: 10px; padding: 11px 12px 10px; box-shadow: 0 1px 2px rgba(27,27,31,0.06); border: 1px solid var(--border); cursor: grab; position: relative; }
         .pm-card:hover { border-color: #cfc8b4; }
         .pm-flag { position: absolute; top: 0; right: 12px; width: 10px; height: 16px; clip-path: polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%); }
+        .pm-card-del { position: absolute; top: 8px; right: 28px; opacity: 0; color: var(--muted); cursor: pointer; }
+        .pm-card:hover .pm-card-del { opacity: 1; }
+        .pm-card-del:hover { color: #9C4221; }
         .pm-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.35; margin-bottom: 8px; padding-right: 14px; }
         .pm-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
         .pm-label-chip { font-size: 10px; padding: 2px 7px; border-radius: 5px; background: #EEE9DC; color: #5C5747; font-weight: 600; }
@@ -361,7 +387,8 @@ export default function Dashboard({ token, user, onLogout }) {
             onClick={() => setActiveProject(p)}
           >
             <span className="pm-proj-dot" style={{ background: "#C9A227" }} />
-            {p.name}
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+            <Trash2 size={12} className="pm-proj-del" onClick={(e) => removeProject(e, p)} />
           </div>
         ))}
         <div className="pm-proj-add">
@@ -451,6 +478,14 @@ export default function Dashboard({ token, user, onLogout }) {
                     {colTasks.map((t) => (
                       <div key={t.id} className="pm-card" draggable onDragStart={() => (dragTaskId.current = t.id)} onClick={() => setSelectedTask(t)}>
                         <div className="pm-flag" style={{ background: PRIORITY_COLOR[t.priority] }} title={`${t.priority} priority`} />
+                        <Trash2
+                          size={12}
+                          className="pm-card-del"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Delete "${t.title}"?`)) deleteTask(t.id);
+                          }}
+                        />
                         <div className="pm-card-title">{t.title}</div>
                         {t.labels && t.labels.length > 0 && (
                           <div className="pm-labels">

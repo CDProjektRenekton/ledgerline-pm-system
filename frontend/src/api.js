@@ -37,6 +37,7 @@ export const api = {
   listProjects: (token) => request("/projects", { token }),
   createProject: (token, name, description) =>
     request("/projects", { method: "POST", body: { name, description }, token }),
+  deleteProject: (token, id) => request(`/projects/${id}`, { method: "DELETE", token }),
 
   listTasks: (token, projectId) => request(`/tasks?projectId=${projectId}`, { token }),
   createTask: (token, payload) => request("/tasks", { method: "POST", body: payload, token }),

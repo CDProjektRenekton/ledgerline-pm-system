@@ -130,6 +130,8 @@ API call and persists in Postgres.
 - **Real-time sync**: Socket.io — task creates/updates/deletes and new comments broadcast instantly to every connected client viewing that project (open the app in two tabs to see it)
 - **Teams**: group project members into named teams (sidebar → Teams), then assign a task to a team instead of one person — every team member gets notified
 - **Email notifications**: assigning a task (to a person or a team) sends an email via SMTP. If `SMTP_HOST` isn't configured, emails are logged to the console instead — see `backend/.env.example` for setup with Gmail or any transactional provider (Resend, SendGrid, Mailgun, Postmark)
+- **Delete tasks**: from the card (hover → trash icon) or from the task detail panel
+- **Delete projects**: sidebar → hover a project → trash icon. Permanently deletes the project and everything in it (tasks, comments, attachments, labels, teams). Restricted to the project's owner — other members get a 403 if they try
 - Background scheduler for due/overdue notifications (hourly job, writes to `notifications` table)
 - Quick-add tasks per column
 
