@@ -33,16 +33,37 @@ export const api = {
   login: (email, password) =>
     request("/auth/login", { method: "POST", body: { email, password } }),
   me: (token) => request("/auth/me", { token }),
+  verifyEmail: (verifyToken) =>
+    request("/auth/verify-email", { method: "POST", body: { token: verifyToken } }),
+  resendVerification: (token) =>
+    request("/auth/resend-verification", { method: "POST", token }),
+  forgotPassword: (email) => request("/auth/forgot-password", { method: "POST", body: { email } }),
+  resetPassword: (token, newPassword) =>
+    request("/auth/reset-password", { method: "POST", body: { token, newPassword } }),
 
   listProjects: (token) => request("/projects", { token }),
+  listArchivedProjects: (token) => request("/projects/archived", { token }),
   createProject: (token, name, description) =>
     request("/projects", { method: "POST", body: { name, description }, token }),
+  archiveProject: (token, id, is_archived) =>
+    request(`/projects/${id}`, { method: "PATCH", body: { is_archived }, token }),
   deleteProject: (token, id) => request(`/projects/${id}`, { method: "DELETE", token }),
 
   listTasks: (token, projectId) => request(`/tasks?projectId=${projectId}`, { token }),
+  searchTasks: (token, projectId, q) => request(`/tasks/search?projectId=${projectId}&q=${encodeURIComponent(q)}`, { token }),
   createTask: (token, payload) => request("/tasks", { method: "POST", body: payload, token }),
   updateTask: (token, id, patch) => request(`/tasks/${id}`, { method: "PATCH", body: patch, token }),
   deleteTask: (token, id) => request(`/tasks/${id}`, { method: "DELETE", token }),
+  taskHistory: (token, taskId) => request(`/tasks/${taskId}/history`, { token }),
+  reorderTasks: (token, projectId, status, orderedIds) =>
+    request("/tasks/reorder", { method: "POST", body: { projectId, status, orderedIds }, token }),
+
+  listSubtasks: (token, taskId) => request(`/subtasks?taskId=${taskId}`, { token }),
+  createSubtask: (token, taskId, title) =>
+    request("/subtasks", { method: "POST", body: { taskId, title }, token }),
+  updateSubtask: (token, id, patch) =>
+    request(`/subtasks/${id}`, { method: "PATCH", body: patch, token }),
+  deleteSubtask: (token, id) => request(`/subtasks/${id}`, { method: "DELETE", token }),
 
   listComments: (token, taskId) => request(`/comments?taskId=${taskId}`, { token }),
   addComment: (token, taskId, body) =>
@@ -53,19 +74,13 @@ export const api = {
     request(`/projects/${projectId}/members`, { method: "POST", body: { email }, token }),
   removeMember: (token, projectId, userId) =>
     request(`/projects/${projectId}/members/${userId}`, { method: "DELETE", token }),
+  updateMemberRole: (token, projectId, userId, role) =>
+    request(`/projects/${projectId}/members/${userId}/role`, { method: "PATCH", body: { role }, token }),
 
   listNotifications: (token) => request("/notifications", { token }),
   unreadNotificationCount: (token) => request("/notifications/unread-count", { token }),
   markNotificationRead: (token, id) => request(`/notifications/${id}/read`, { method: "PATCH", token }),
   markAllNotificationsRead: (token) => request("/notifications/read-all", { method: "PATCH", token }),
-
-  taskHistory: (token, taskId) => request(`/tasks/${taskId}/history`, { token }),
-  reorderTasks: (token, projectId, status, orderedIds) =>
-    request("/tasks/reorder", { method: "POST", body: { projectId, status, orderedIds }, token }),
-
-  forgotPassword: (email) => request("/auth/forgot-password", { method: "POST", body: { email } }),
-  resetPassword: (token, newPassword) =>
-    request("/auth/reset-password", { method: "POST", body: { token, newPassword } }),
 
   listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
   createTeam: (token, projectId, name, color) =>

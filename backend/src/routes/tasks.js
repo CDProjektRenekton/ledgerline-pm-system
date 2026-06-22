@@ -2,7 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { emitToProject, emitToUser } = require("../socket");
-const { sendAssignmentEmail } = require("../email");
+const { sendAssignmentEmail, sendStatusChangeEmail } = require("../email");
 const { logHistory } = require("../history");
 
 const router = express.Router();
@@ -93,6 +93,40 @@ router.get("/", async (req, res) => {
   );
   const tasks = await attachLabels(result.rows);
   res.json(tasks);
+});
+
+// Search tasks within a project using full-text search + title/description ilike fallback
+router.get("/search", async (req, res) => {
+  const { projectId, q } = req.query;
+  if (!projectId) return res.status(400).json({ error: "projectId is required" });
+  if (!q || !q.trim()) {
+    // Empty query — return everything (same as the board list)
+    const all = await db.query(
+      `SELECT t.*, u.name AS assignee_name, u.initials AS assignee_initials, u.color AS assignee_color,
+              tm.name AS team_name, tm.color AS team_color
+       FROM tasks t
+       LEFT JOIN users u ON u.id = t.assignee_id
+       LEFT JOIN teams tm ON tm.id = t.assignee_team_id
+       WHERE t.project_id = $1 ORDER BY t.status, t.position, t.created_at`,
+      [projectId]
+    );
+    return res.json(await attachLabels(all.rows));
+  }
+  const result = await db.query(
+    `SELECT t.*, u.name AS assignee_name, u.initials AS assignee_initials, u.color AS assignee_color,
+            tm.name AS team_name, tm.color AS team_color,
+            ts_rank(t.search_vector, plainto_tsquery('english', $2)) AS rank
+     FROM tasks t
+     LEFT JOIN users u ON u.id = t.assignee_id
+     LEFT JOIN teams tm ON tm.id = t.assignee_team_id
+     WHERE t.project_id = $1
+       AND (t.search_vector @@ plainto_tsquery('english', $2)
+            OR t.title ILIKE $3
+            OR t.description ILIKE $3)
+     ORDER BY rank DESC, t.status, t.position`,
+    [projectId, q.trim(), `%${q.trim()}%`]
+  );
+  res.json(await attachLabels(result.rows));
 });
 
 // Create a task — assignee can be a single user (assigneeId) OR a team (assigneeTeamId), not both.
@@ -256,13 +290,40 @@ router.patch("/:id", async (req, res) => {
     }
   }
 
-  // Status-change notification for whoever's currently assigned
-  if (body.status && task.assignee_id) {
-    const notifResult = await db.query(
-      `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1, $2, 'status_change', $3) RETURNING *`,
-      [task.assignee_id, task.id, `Task "${task.title}" moved to ${STATUS_LABEL[body.status]}`]
-    );
-    emitToUser(task.assignee_id, "notification:new", notifResult.rows[0]);
+  // Status-change notification + email for whoever's assigned
+  if (body.status && body.status !== existing.status) {
+    const recipients = [];
+    if (task.assignee_id) recipients.push(task.assignee_id);
+    if (task.assignee_team_id) {
+      const members = await db.query("SELECT user_id FROM team_members WHERE team_id = $1", [task.assignee_team_id]);
+      members.rows.forEach((r) => recipients.push(r.user_id));
+    }
+    const projResult = await db.query("SELECT name FROM projects WHERE id = $1", [task.project_id]);
+    const projectName = projResult.rows[0]?.name || "a project";
+
+    for (const uid of recipients) {
+      const notifResult = await db.query(
+        `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1, $2, 'status_change', $3) RETURNING *`,
+        [uid, task.id, `"${task.title}" moved to ${STATUS_LABEL[body.status]}`]
+      );
+      emitToUser(uid, "notification:new", notifResult.rows[0]);
+
+      // Don't email the person who made the change
+      if (uid !== req.user.id) {
+        const uRow = await db.query("SELECT name, email FROM users WHERE id = $1", [uid]);
+        if (uRow.rows.length > 0) {
+          sendStatusChangeEmail({
+            to: uRow.rows[0].email,
+            recipientName: uRow.rows[0].name,
+            taskTitle: task.title,
+            projectName,
+            oldStatus: existing.status,
+            newStatus: body.status,
+            changedByName: req.user.name,
+          }).catch((e) => console.error("Status-change email failed:", e.message));
+        }
+      }
+    }
   }
 
   // New-assignment notification + email (only fires when the assignment actually changed)

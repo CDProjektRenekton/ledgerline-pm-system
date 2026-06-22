@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { api, setToken } from "./api";
 
-export default function Login({ onAuthed, resetToken }) {
+export default function Login({ onAuthed, resetToken, verifyToken }) {
   const [mode, setMode] = useState(resetToken ? "reset" : "login"); // login | register | forgot | reset
   const [name, setName] = useState("");
   const [email, setEmail] = useState("jister@example.com");
@@ -65,6 +65,9 @@ export default function Login({ onAuthed, resetToken }) {
         <div style={styles.mark}>L</div>
         <h1 style={styles.title}>Ledgerline</h1>
         <p style={styles.subtitle}>{subtitle}</p>
+        {verifyToken && mode === "login" && (
+          <div style={styles.info}>✓ Your email has been verified. You can now log in.</div>
+        )}
 
         <form onSubmit={submit}>
           {mode === "register" && (

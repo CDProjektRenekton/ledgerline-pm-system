@@ -16,6 +16,9 @@ import {
   Users,
   UserCog,
   Clock,
+  Archive,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
@@ -33,6 +36,8 @@ const COLUMNS = [
   { id: "done", label: "Done", no: "04", accent: "#3F7D52" },
 ];
 
+const STATUS_LABELS = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
+const STATUS_COLORS = { todo: "#8B8680", inprogress: "#1F6F78", review: "#C9A227", done: "#3F7D52" };
 const PRIORITY_COLOR = { high: "#9C4221", medium: "#C9A227", low: "#5C7A89" };
 
 function formatDue(dateStr) {
@@ -48,6 +53,10 @@ export default function Dashboard({ token, user, onLogout }) {
   const [teams, setTeams] = useState([]);
   const [showTeamsPanel, setShowTeamsPanel] = useState(false);
   const [showMembersPanel, setShowMembersPanel] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedProjects, setArchivedProjects] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState(null); // null = not searching
   const [tasks, setTasks] = useState([]);
   const [activeView, setActiveView] = useState("kanban");
   const [selectedTask, setSelectedTask] = useState(null);
@@ -56,6 +65,12 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newComment, setNewComment] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [subtasks, setSubtasks] = useState([]);
+  const [newSubtask, setNewSubtask] = useState("");
+  // Save-button state: track unsaved edits to title/description separately
+  // so we only write to the DB (and activity log) when the user explicitly saves.
+  const [editTitle, setEditTitle] = useState(null);   // null = not editing
+  const [editDesc, setEditDesc] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [quickAdd, setQuickAdd] = useState({});
   const [newProjectName, setNewProjectName] = useState("");
@@ -107,6 +122,18 @@ export default function Dashboard({ token, user, onLogout }) {
         return cur;
       });
     });
+    socket.on("subtask:created", (s) => {
+      setSelectedTask((cur) => {
+        if (cur && cur.id === s.task_id) setSubtasks((prev) => prev.some((x) => x.id === s.id) ? prev : [...prev, s]);
+        return cur;
+      });
+    });
+    socket.on("subtask:updated", (s) => {
+      setSubtasks((prev) => prev.map((x) => (x.id === s.id ? s : x)));
+    });
+    socket.on("subtask:deleted", ({ id }) => {
+      setSubtasks((prev) => prev.filter((x) => x.id !== id));
+    });
     socket.on("notification:new", (n) => {
       setNotifications((prev) => [n, ...prev].slice(0, 50));
       setUnreadCount((c) => c + 1);
@@ -151,6 +178,25 @@ export default function Dashboard({ token, user, onLogout }) {
       }
     })();
   }, [token]);
+
+  // Load archived projects when the drawer is opened
+  useEffect(() => {
+    if (!showArchived) return;
+    api.listArchivedProjects(token).then(setArchivedProjects).catch(() => {});
+  }, [showArchived, token]);
+
+  // Debounced search — triggers 300ms after the user stops typing
+  useEffect(() => {
+    if (!activeProject) return;
+    if (!searchQuery.trim()) { setSearchResults(null); return; }
+    const t = setTimeout(async () => {
+      try {
+        const results = await api.searchTasks(token, activeProject.id, searchQuery);
+        setSearchResults(results);
+      } catch (err) { setError(err.message); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery, activeProject, token]);
 
   const markNotificationRead = async (id) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
@@ -203,29 +249,36 @@ export default function Dashboard({ token, user, onLogout }) {
     setMembers(memberList);
   };
 
-  // Load comments + attachments + history when a task is opened
+  // Load comments + attachments + history + subtasks when a task is opened
   useEffect(() => {
     if (!selectedTask) {
       setComments([]);
       setAttachments([]);
       setHistory([]);
+      setSubtasks([]);
+      setEditTitle(null);
+      setEditDesc(null);
       return;
     }
+    setEditTitle(selectedTask.title);
+    setEditDesc(selectedTask.description || "");
     (async () => {
       try {
-        const [c, a, h] = await Promise.all([
+        const [c, a, h, s] = await Promise.all([
           api.listComments(token, selectedTask.id),
           api.listAttachments(token, selectedTask.id),
           api.taskHistory(token, selectedTask.id),
+          api.listSubtasks(token, selectedTask.id),
         ]);
         setComments(c);
         setAttachments(a);
         setHistory(h);
+        setSubtasks(s);
       } catch (err) {
         setError(err.message);
       }
     })();
-  }, [selectedTask, token]);
+  }, [selectedTask?.id, token]);
 
   const refreshTasks = async () => {
     if (!activeProject) return;
@@ -311,6 +364,62 @@ export default function Dashboard({ token, user, onLogout }) {
       setError(err.message);
       refreshTasks();
     }
+  };
+
+  // Save title/description explicitly (not per-keystroke)
+  const saveTaskText = async (id) => {
+    const patch = {};
+    if (editTitle !== null && editTitle !== selectedTask.title) patch.title = editTitle;
+    if (editDesc !== null && editDesc !== selectedTask.description) patch.description = editDesc;
+    if (Object.keys(patch).length === 0) return;
+    try {
+      const updated = await api.updateTask(token, id, patch);
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...updated } : t)));
+      setSelectedTask((cur) => (cur && cur.id === id ? { ...cur, ...updated } : cur));
+      // Refresh history so the new entries appear
+      const h = await api.taskHistory(token, id);
+      setHistory(h);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const addSubtask = async () => {
+    if (!newSubtask.trim() || !selectedTask) return;
+    try {
+      const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim());
+      setSubtasks((prev) => [...prev, s]);
+      setNewSubtask("");
+    } catch (err) { setError(err.message); }
+  };
+
+  const toggleSubtask = async (id, is_done) => {
+    setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done } : s)));
+    try {
+      await api.updateSubtask(token, id, { is_done });
+      const h = await api.taskHistory(token, selectedTask.id);
+      setHistory(h);
+    } catch (err) { setError(err.message); refreshTasks(); }
+  };
+
+  const deleteSubtask = async (id) => {
+    setSubtasks((prev) => prev.filter((s) => s.id !== id));
+    try { await api.deleteSubtask(token, id); }
+    catch (err) { setError(err.message); }
+  };
+
+  const archiveProject = async (id, is_archived) => {
+    try {
+      await api.archiveProject(token, id, is_archived);
+      if (is_archived) {
+        setProjects((prev) => prev.filter((p) => p.id !== id));
+        if (activeProject && activeProject.id === id) setActiveProject(null);
+      } else {
+        const projs = await api.listProjects(token);
+        setProjects(projs);
+        setArchivedProjects((prev) => prev.filter((p) => p.id !== id));
+      }
+    } catch (err) { setError(err.message); }
   };
 
   const postComment = async () => {
@@ -486,6 +595,26 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-attachment-del { cursor:pointer; color: var(--muted); flex-shrink:0; }
         .pm-attachment-del:hover { color: #9C4221; }
         .pm-error-banner { background:#FBEAE2; color:#9C4221; padding:8px 28px; font-size:12.5px; }
+        .pm-verify-banner { background:#FFF8E1; color:#7A5900; padding:8px 28px; font-size:12.5px; border-bottom: 1px solid #F0E0A0; }
+        .pm-verify-link { font-weight:600; cursor:pointer; text-decoration:underline; }
+        .pm-search-results { flex:1; overflow-y:auto; padding: 18px 28px; }
+        .pm-search-header { font-size:12px; color:var(--muted); margin-bottom:10px; }
+        .pm-search-task-row { display:flex; align-items:center; gap:10px; padding: 9px 12px; background:var(--card); border:1px solid var(--border); border-radius:9px; margin-bottom:7px; cursor:pointer; }
+        .pm-search-task-row:hover { border-color:#cfc8b4; }
+        .pm-search-status { font-size:10px; padding:2px 7px; border-radius:999px; color:#fff; font-weight:700; flex-shrink:0; }
+        .pm-subtasks-wrap { margin-top: 14px; }
+        .pm-subtask-row { display:flex; align-items:center; gap:8px; padding: 6px 0; border-bottom: 1px solid #F1EDE2; }
+        .pm-subtask-row:last-child { border-bottom: none; }
+        .pm-subtask-check { cursor:pointer; color:var(--muted); flex-shrink:0; }
+        .pm-subtask-check.done { color: var(--teal); }
+        .pm-subtask-title { flex:1; font-size:13px; }
+        .pm-subtask-title.done { text-decoration:line-through; color:var(--muted); }
+        .pm-subtask-del { cursor:pointer; color:var(--muted); opacity:0; transition:opacity 0.15s; }
+        .pm-subtask-row:hover .pm-subtask-del { opacity:1; }
+        .pm-subtask-add { display:flex; gap:7px; margin-top:8px; }
+        .pm-subtask-add input { flex:1; border:1px dashed var(--border); border-radius:7px; padding:6px 9px; font-size:12.5px; outline:none; }
+        .pm-subtask-add input:focus { border-color:var(--gold); background:var(--card); }
+        .pm-save-row { display:flex; justify-content:flex-end; margin-top:5px; }
       `}</style>
 
       <aside className="pm-sidebar">
@@ -506,7 +635,10 @@ export default function Dashboard({ token, user, onLogout }) {
           >
             <span className="pm-proj-dot" style={{ background: "#C9A227" }} />
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-            <Trash2 size={12} className="pm-proj-del" onClick={(e) => removeProject(e, p)} />
+            <Archive size={12} className="pm-proj-del" title="Archive" onClick={(e) => { e.stopPropagation(); archiveProject(p.id, true); }} />
+            {p.my_role === "owner" && (
+              <Trash2 size={12} className="pm-proj-del" title="Delete" onClick={(e) => removeProject(e, p)} />
+            )}
           </div>
         ))}
         <div className="pm-proj-add">
@@ -528,6 +660,9 @@ export default function Dashboard({ token, user, onLogout }) {
             <div className="pm-proj-item" onClick={() => setShowTeamsPanel(true)}>
               <Users size={13} /> Teams {teams.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{teams.length}</span>}
             </div>
+            <div className="pm-proj-item" onClick={() => setShowArchived(true)}>
+              <Archive size={13} /> Archived
+            </div>
           </>
         )}
 
@@ -540,6 +675,15 @@ export default function Dashboard({ token, user, onLogout }) {
 
       <div className="pm-main">
         {error && <div className="pm-error-banner">{error} <span style={{cursor:"pointer", fontWeight:600}} onClick={() => setError("")}> Dismiss</span></div>}
+        {!user.is_verified && (
+          <div className="pm-verify-banner">
+            ⚠ Please verify your email address.{" "}
+            <span className="pm-verify-link" onClick={async () => {
+              try { await api.resendVerification(token); setError(""); alert("Verification email sent!"); }
+              catch (e) { setError(e.message); }
+            }}>Resend verification email</span>
+          </div>
+        )}
         <div className="pm-topbar">
           <div className="pm-topbar-row1">
             <div className="pm-title pm-serif">
@@ -549,7 +693,15 @@ export default function Dashboard({ token, user, onLogout }) {
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <div className="pm-search">
                 <Search size={14} />
-                <input placeholder="Search tasks…" />
+                <input
+                  placeholder="Search tasks…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setSearchQuery("")}
+                />
+                {searchQuery && (
+                  <X size={13} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => setSearchQuery("")} />
+                )}
               </div>
               <div className="pm-avatars">
                 {members.map((m) => (
@@ -580,6 +732,25 @@ export default function Dashboard({ token, user, onLogout }) {
         {!activeProject ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
             Create a project to get started.
+          </div>
+        ) : searchResults !== null ? (
+          <div className="pm-search-results">
+            <div className="pm-search-header">
+              {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} for "{searchQuery}"
+            </div>
+            {searchResults.length === 0 && (
+              <div style={{ color: "var(--muted)", fontSize: 13 }}>No tasks match your search.</div>
+            )}
+            {searchResults.map((t) => (
+              <div className="pm-search-task-row" key={t.id} onClick={() => setSelectedTask(t)}>
+                <span className="pm-search-status" style={{ background: STATUS_COLORS[t.status] }}>{STATUS_LABELS[t.status]}</span>
+                <span style={{ fontWeight: 600, fontSize: 13.5, flex: 1 }}>{t.title}</span>
+                <span className="pm-pri-dot" style={{ background: PRIORITY_COLOR[t.priority], width: 8, height: 8, borderRadius: "50%", display: "inline-block" }} />
+                {t.assignee_initials && (
+                  <span className="pm-card-avatar" style={{ background: t.assignee_color, width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 9.5, fontWeight: 700 }}>{t.assignee_initials}</span>
+                )}
+              </div>
+            ))}
           </div>
         ) : activeView === "kanban" ? (
           <div className="pm-board">
@@ -671,6 +842,35 @@ export default function Dashboard({ token, user, onLogout }) {
         )}
       </div>
 
+      {showArchived && (
+        <div className="pm-overlay" onClick={() => setShowArchived(false)}>
+          <div className="pm-panel" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-panel-head">
+              <span className="pm-serif" style={{ fontSize: 17, fontWeight: 600 }}>Archived Projects</span>
+              <X size={18} className="pm-panel-close" onClick={() => setShowArchived(false)} />
+            </div>
+            {archivedProjects.length === 0 && (
+              <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>No archived projects yet.</div>
+            )}
+            {archivedProjects.map((p) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+                <span className="pm-proj-dot" style={{ background: "#8B8680", width: 8, height: 8, borderRadius: "50%", flexShrink: 0 }} />
+                <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{p.name}</span>
+                <span style={{ fontSize: 11.5, color: "var(--muted)" }}>{p.task_count} tasks</span>
+                <button className="pm-btn-primary" style={{ padding: "5px 10px", fontSize: 11.5, background: "#3F7D52" }}
+                  onClick={() => { archiveProject(p.id, false); }}>
+                  Restore
+                </button>
+                {p.my_role === "owner" && (
+                  <Trash2 size={14} style={{ cursor: "pointer", color: "#9C4221" }}
+                    onClick={() => { if (window.confirm(`Permanently delete "${p.name}" and all its tasks?`)) { api.deleteProject(token, p.id).then(() => setArchivedProjects((prev) => prev.filter((x) => x.id !== p.id))).catch((e) => setError(e.message)); } }} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {showMembersPanel && activeProject && (
         <MembersPanel
           token={token}
@@ -700,10 +900,53 @@ export default function Dashboard({ token, user, onLogout }) {
               <span className="pm-mono" style={{ fontSize: 11, color: "var(--muted)" }}>TASK-{selectedTask.id}</span>
               <X size={18} className="pm-panel-close" onClick={() => setSelectedTask(null)} />
             </div>
-            <textarea className="pm-panel-title" rows={2} value={selectedTask.title} onChange={(e) => patchTask(selectedTask.id, { title: e.target.value })} />
+            <textarea
+              className="pm-panel-title"
+              rows={2}
+              value={editTitle !== null ? editTitle : selectedTask.title}
+              onChange={(e) => setEditTitle(e.target.value)}
+              onBlur={() => saveTaskText(selectedTask.id)}
+            />
+            {editTitle !== null && editTitle !== selectedTask.title && (
+              <div className="pm-save-row">
+                <button className="pm-btn-primary" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => saveTaskText(selectedTask.id)}>Save title</button>
+              </div>
+            )}
 
             <div className="pm-field-label">Description</div>
-            <textarea className="pm-textarea" value={selectedTask.description || ""} placeholder="Add a description…" onChange={(e) => patchTask(selectedTask.id, { description: e.target.value })} />
+            <textarea
+              className="pm-textarea"
+              value={editDesc !== null ? editDesc : (selectedTask.description || "")}
+              placeholder="Add a description…"
+              onChange={(e) => setEditDesc(e.target.value)}
+              onBlur={() => saveTaskText(selectedTask.id)}
+            />
+            {editDesc !== null && editDesc !== (selectedTask.description || "") && (
+              <div className="pm-save-row">
+                <button className="pm-btn-primary" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => saveTaskText(selectedTask.id)}>Save description</button>
+              </div>
+            )}
+
+            <div className="pm-field-label">Subtasks ({subtasks.filter((s) => s.is_done).length}/{subtasks.length})</div>
+            <div className="pm-subtasks-wrap">
+              {subtasks.map((s) => (
+                <div className="pm-subtask-row" key={s.id}>
+                  <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} onClick={() => toggleSubtask(s.id, !s.is_done)}>
+                    {s.is_done ? <CheckSquare size={16} /> : <Square size={16} />}
+                  </span>
+                  <span className={`pm-subtask-title ${s.is_done ? "done" : ""}`}>{s.title}</span>
+                  <X size={13} className="pm-subtask-del" onClick={() => deleteSubtask(s.id)} />
+                </div>
+              ))}
+              <div className="pm-subtask-add">
+                <input
+                  placeholder="Add a subtask…"
+                  value={newSubtask}
+                  onChange={(e) => setNewSubtask(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addSubtask()}
+                />
+              </div>
+            </div>
 
             <div className="pm-field-label">Status</div>
             <select className="pm-select" value={selectedTask.status} onChange={(e) => patchTask(selectedTask.id, { status: e.target.value })}>

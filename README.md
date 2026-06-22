@@ -132,33 +132,34 @@ API call and persists in Postgres.
 
 ## What's implemented
 
-- JWT authentication (register/login, bcrypt-hashed passwords) with session restore on page reload (`/api/auth/me`)
-- **Forgot / reset password**: email a time-limited reset link (1 hour), in dev mode it's logged to the console instead of sent
+- JWT authentication (register/login, bcrypt-hashed passwords) with session restore on page reload
+- **Email verification on registration**: a 24-hour link is sent on sign-up; unverified users see a reminder banner with a resend option. The app remains usable while unverified (dev mode logs the link to the console instead of sending)
+- **Forgot / reset password**: time-limited single-use reset link (1 hour), dev mode logs to console
 - Multi-project workspace, project membership
-- **Members**: sidebar → Members — invite anyone who already has an account by email, so they show up as an assignee option (this is what was missing before — assigning to yourself only happens because a brand-new project starts with just its creator as a member)
-- **Kanban board**: To Do → In Progress → In Review → Done, drag-and-drop status updates, **plus precise reordering within a column** (drop directly on a card to insert before/after it)
-- **List view**: sortable table of all tasks with status/priority/assignee/due date
-- **Calendar view**: month grid with tasks plotted on their due date
-- **Timeline view**: Gantt-style bars from creation date to due date
-- Task fields: title, description, priority, assignee, due date, labels
-- **Task activity trail**: every status/priority/assignee/due-date/title change is logged with who did it and when, shown as a unified timeline alongside comments in the task panel
-- Task detail panel with live comments
-- **File attachments**: real upload/download/delete (stored on disk, served at `/uploads/...`), logged to the activity trail
-- **Real-time sync**: Socket.io — task creates/updates/deletes/reorders and new comments broadcast instantly to every connected client viewing that project
-- **Notification bell**: unread badge in the top bar, dropdown list, mark-as-read / mark-all-read, and new notifications arrive live over the socket (no refresh needed)
-- **Teams**: group project members into named teams (sidebar → Teams), then assign a task to a team instead of one person — every team member gets notified
-- **Email notifications**: assignment emails (person or team) and due-date reminder emails (due-soon and overdue, for individuals and whole teams) via SMTP. If `SMTP_HOST` isn't configured, emails are logged to the console instead — see `backend/.env.example` for setup with Gmail or any transactional provider (Resend, SendGrid, Mailgun, Postmark)
-- **Delete tasks**: from the card (hover → trash icon) or from the task detail panel
-- **Delete projects**: sidebar → hover a project → trash icon. Permanently deletes the project and everything in it (tasks, comments, attachments, labels, teams). Restricted to the project's owner — other members get a 404 if they try
+- **Role enforcement**: owner / admin / member roles on every project. Members can't add/remove members (admin+ only). Archive/rename requires admin+. Delete requires owner. Role shown in Members panel. Owner can promote any member
+- **Members**: sidebar → Members — invite by email, remove members, view roles
+- **Kanban board**: To Do → In Progress → In Review → Done, drag-and-drop between columns and precise reorder within columns
+- **List view**: table of all tasks with status/priority/assignee/due date
+- **Calendar view**: month grid with tasks plotted on due date
+- **Timeline view**: Gantt-style bars from creation to due date
+- **Search**: live full-text search across task titles and descriptions (GIN index), appears inline above the board when you type in the search bar
+- **Archived projects**: sidebar → Archived — restore or permanently delete. Archive button on each project in the sidebar. Members can archive; only owners can delete
+- Task fields: title, description, priority, assignee (person or team), due date, labels
+- **Save button for title & description**: changes to the task title and description are only written to the database (and activity trail) when you save or click away — not on every keystroke
+- **Subtasks / checklist**: add, check off, and delete subtasks inside a task. Progress shown as X/Y in the field label. Completions logged to the activity trail
+- **Task activity trail**: every status/priority/assignee/due-date/title/description/attachment/subtask change is logged with who did it and when, shown as a unified timeline alongside comments
+- File attachments: upload/download/delete, logged to activity trail
+- **Real-time sync**: Socket.io — task creates/updates/deletes/reorders, subtask changes, comments, and notifications all broadcast live
+- **Notification bell**: unread badge, dropdown, mark-read / mark-all-read, real-time delivery
+- **Teams**: group members, assign tasks to a whole team at once
+- **Email notifications**: assignment emails (person or team), due-date reminder emails, **status-change emails** to the assignee (or whole team) whenever a task moves columns. All fall back to console logging in dev mode if SMTP isn't configured
+- Delete tasks (card hover → trash, or task panel)
+- Delete projects (owner-only, cascades all data)
 - Quick-add tasks per column
 
-## What's next (ideas for future iterations)
+## What's next (low-priority hardening)
 
-- Role-based permissions (the `project_members.role` column exists and is now enforced for member-removal and project deletion, but not yet for finer-grained actions like editing vs. viewing)
-- Search that actually filters (the search bar in the top bar is currently decorative)
-- Archived projects view (`is_archived` exists on the backend via `PATCH /api/projects/:id`, but there's no UI to archive/restore or browse archived projects yet)
-- Subtasks / checklists within a task
 - Rate limiting and security headers (`helmet`) for the API
 - Avatar image uploads instead of colored initials
-- Automated tests + a GitHub Actions CI workflow
-- Production deployment hardening (this repo is set up for Render via `render.yaml`, but for self-hosting you'd want a process manager, log rotation, etc.)
+- Automated tests + GitHub Actions CI workflow
+- Production Dockerfiles and self-hosting docs

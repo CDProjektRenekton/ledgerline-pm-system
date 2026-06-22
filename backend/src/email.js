@@ -115,4 +115,60 @@ async function sendPasswordResetEmail({ to, recipientName, resetUrl }) {
   }
 }
 
-module.exports = { sendAssignmentEmail, sendReminderEmail, sendPasswordResetEmail };
+async function sendVerificationEmail({ to, recipientName, verifyUrl }) {
+  const subject = "Verify your Ledgerline email address";
+  const text = `Hi ${recipientName},\n\nThanks for signing up! Please verify your email address by clicking the link below:\n\n${verifyUrl}\n\nThis link expires in 24 hours.`;
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <p>Hi ${recipientName},</p>
+      <p>Thanks for signing up to <strong>Ledgerline</strong>! Please verify your email address:</p>
+      <p><a href="${verifyUrl}" style="display:inline-block; background:#1F6F78; color:#fff; padding:10px 18px; border-radius:8px; text-decoration:none; font-weight:600;">Verify email address</a></p>
+      <p style="font-size:12px; color:#8B8680;">This link expires in 24 hours.</p>
+    </div>
+  `;
+  const t = getTransporter();
+  if (!t) {
+    console.log(`[email:dev-mode] Verification link for ${to}: ${verifyUrl}`);
+    return { sent: false, mode: "console-fallback" };
+  }
+  try {
+    await t.sendMail({ from: process.env.FROM_EMAIL || "Ledgerline <no-reply@ledgerline.app>", to, subject, text, html });
+    return { sent: true };
+  } catch (err) {
+    console.error(`Failed to send verification email to ${to}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+async function sendStatusChangeEmail({ to, recipientName, taskTitle, projectName, oldStatus, newStatus, changedByName }) {
+  const STATUS_LABEL = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
+  const subject = `Task status updated: ${taskTitle}`;
+  const text = `Hi ${recipientName},\n\n${changedByName} moved "${taskTitle}" in "${projectName}" from ${STATUS_LABEL[oldStatus] || oldStatus} to ${STATUS_LABEL[newStatus] || newStatus}.\n\nLog in to Ledgerline to see the full details.`;
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <p>Hi ${recipientName},</p>
+      <p><strong>${changedByName}</strong> updated a task in <strong>${projectName}</strong>:</p>
+      <p style="background:#F6F2E9; border-left:3px solid #C9A227; padding:10px 14px; font-weight:600;">${taskTitle}</p>
+      <p style="font-size:13px; color:#5C5747;">
+        <span style="background:#E4DFD3; padding:2px 8px; border-radius:4px;">${STATUS_LABEL[oldStatus] || oldStatus}</span>
+        &nbsp;→&nbsp;
+        <span style="background:#1F6F78; color:#fff; padding:2px 8px; border-radius:4px;">${STATUS_LABEL[newStatus] || newStatus}</span>
+      </p>
+      <p>Log in to Ledgerline to see the full details.</p>
+    </div>
+  `;
+  const t = getTransporter();
+  if (!t) {
+    console.log(`[email:dev-mode] Would send status-change email to ${to}: "${subject}"`);
+    return { sent: false, mode: "console-fallback" };
+  }
+  try {
+    await t.sendMail({ from: process.env.FROM_EMAIL || "Ledgerline <no-reply@ledgerline.app>", to, subject, text, html });
+    return { sent: true };
+  } catch (err) {
+    console.error(`Failed to send status-change email to ${to}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+module.exports = { sendAssignmentEmail, sendReminderEmail, sendPasswordResetEmail, sendVerificationEmail, sendStatusChangeEmail };
