@@ -639,7 +639,7 @@ export default function Dashboard({ token, user, onLogout }) {
           <img
             src="https://i.ibb.co/fdDx5fKP/1200px-Metropolitan-Waterworks-and-Sewerage-System-MWSS-NAWASA-svg.png"
             alt="MWSS Logo"
-            style={{ width: 54, height: 54, objectFit: "contain", filter: "brightness(0) invert(1)", flexShrink: 0 }}
+            style={{ width: 54, height: 54, objectFit: "contain", flexShrink: 0 }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
           <div>

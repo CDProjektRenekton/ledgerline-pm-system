@@ -82,7 +82,7 @@ export default function Login({ onAuthed, resetToken, verifyToken }) {
         }
 
         .login-logo-wrap { position:relative; z-index:1; width:100%; max-width:420px; }
-        .login-logo-img { width:100%; max-width:380px; filter:brightness(0) invert(1); display:block; margin-bottom:32px; }
+        .login-logo-img { width:100%; max-width:380px; display:block; margin-bottom:32px; }
         .login-left-title {
           font-family:'Merriweather',serif; font-size:28px; color:#fff; line-height:1.3;
           font-weight:700; max-width:380px; margin-bottom:14px;
