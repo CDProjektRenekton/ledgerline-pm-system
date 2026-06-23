@@ -30,15 +30,15 @@ import MembersPanel from "./MembersPanel.jsx";
 import NotificationBell from "./NotificationBell.jsx";
 
 const COLUMNS = [
-  { id: "todo", label: "To Do", no: "01", accent: "#8B8680" },
-  { id: "inprogress", label: "In Progress", no: "02", accent: "#1F6F78" },
-  { id: "review", label: "In Review", no: "03", accent: "#C9A227" },
-  { id: "done", label: "Done", no: "04", accent: "#3F7D52" },
+  { id: "todo",       label: "To Do",       no: "01", accent: "#6B92AD" },
+  { id: "inprogress", label: "In Progress",  no: "02", accent: "#1A7FA8" },
+  { id: "review",     label: "In Review",    no: "03", accent: "#F59E0B" },
+  { id: "done",       label: "Done",         no: "04", accent: "#10B981" },
 ];
 
 const STATUS_LABELS = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
-const STATUS_COLORS = { todo: "#8B8680", inprogress: "#1F6F78", review: "#C9A227", done: "#3F7D52" };
-const PRIORITY_COLOR = { high: "#9C4221", medium: "#C9A227", low: "#5C7A89" };
+const STATUS_COLORS = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
+const PRIORITY_COLOR = { high: "#EF4444", medium: "#F59E0B", low: "#6B92AD" };
 
 function formatDue(dateStr) {
   if (!dateStr) return null;
@@ -65,6 +65,7 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newComment, setNewComment] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [showAllActivity, setShowAllActivity] = useState(false);
   const [subtasks, setSubtasks] = useState([]);
   const [newSubtask, setNewSubtask] = useState("");
   // Save-button state: track unsaved edits to title/description separately
@@ -262,6 +263,7 @@ export default function Dashboard({ token, user, onLogout }) {
     }
     setEditTitle(selectedTask.title);
     setEditDesc(selectedTask.description || "");
+    setShowAllActivity(false);
     (async () => {
       try {
         const [c, a, h, s] = await Promise.all([
@@ -502,49 +504,64 @@ export default function Dashboard({ token, user, onLogout }) {
     ...comments.map((c) => ({ kind: "comment", ...c })),
   ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
+  const ACTIVITY_PREVIEW = 5;
+  const visibleActivity = showAllActivity ? activityFeed : activityFeed.slice(-ACTIVITY_PREVIEW);
+
   return (
     <div className="pm-root">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Merriweather:wght@700&display=swap');
+
+        * { box-sizing: border-box; }
         .pm-root {
-          --ink: #1B1B1F; --paper: #F6F2E9; --paper-deep: #EFE9DA; --card: #FFFFFF;
-          --muted: #8B8680; --border: #E4DFD3; --teal: #1F6F78; --teal-deep: #16545B; --gold: #C9A227;
+          --ink: #0B2233;
+          --paper: #EEF6FC;
+          --paper-deep: #DCF0FB;
+          --card: #FFFFFF;
+          --muted: #6B92AD;
+          --border: #C5DFF0;
+          --teal: #1A7FA8;
+          --teal-deep: #0B4F6C;
+          --gold: #1A7FA8;
+          --sidebar-bg: linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%);
           font-family: 'Inter', sans-serif; color: var(--ink); background: var(--paper);
           height: 100vh; display: flex; overflow: hidden;
         }
-        .pm-serif { font-family: 'Fraunces', serif; }
+        .pm-serif { font-family: 'Merriweather', serif; }
         .pm-mono { font-family: 'JetBrains Mono', monospace; }
-        .pm-sidebar { width: 240px; flex-shrink: 0; background: var(--ink); color: #EDEAE2; display: flex; flex-direction: column; }
-        .pm-sidebar-brand { padding: 22px 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:10px; }
-        .pm-sidebar-brand .mark { width: 30px; height: 30px; border-radius: 7px; background: linear-gradient(135deg, var(--gold), #E3C25C); display: flex; align-items: center; justify-content: center; font-family: 'Fraunces', serif; font-weight: 700; color: #1B1B1F; font-size: 15px; }
-        .pm-sidebar-section { padding: 16px 20px 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #8E8B83; }
-        .pm-proj-item { margin: 2px 12px; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; cursor: pointer; color: #D8D5CC; }
-        .pm-proj-item.active { background: rgba(255,255,255,0.08); color: #fff; }
-        .pm-proj-del { flex-shrink: 0; opacity: 0; color: #9B988F; cursor: pointer; }
+        .pm-sidebar { width: 240px; flex-shrink: 0; background: linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%); color: #E8F4FC; display: flex; flex-direction: column; }
+        .pm-sidebar-brand { padding: 16px 16px 14px; border-bottom: 1px solid rgba(255,255,255,0.12); display:flex; flex-direction:row; align-items:center; gap:10px; }
+        .pm-sidebar-section { padding: 14px 20px 5px; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: rgba(255,255,255,0.5); }
+        .pm-proj-item { margin: 2px 10px; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; cursor: pointer; color: rgba(255,255,255,0.82); }
+        .pm-proj-item.active { background: rgba(255,255,255,0.18); color: #fff; }
+        .pm-proj-item:hover:not(.active) { background: rgba(255,255,255,0.09); }
+        .pm-proj-del { flex-shrink: 0; opacity: 0; color: rgba(255,255,255,0.5); cursor: pointer; }
         .pm-proj-item:hover .pm-proj-del { opacity: 1; }
-        .pm-proj-del:hover { color: #E08A6B; }
+        .pm-proj-del:hover { color: #FCA5A5; }
         .pm-proj-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink:0; }
         .pm-proj-add { display:flex; gap:6px; margin: 8px 12px; }
-        .pm-proj-add input { flex:1; min-width:0; background: rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:#fff; border-radius:6px; padding:6px 8px; font-size:12px; outline:none; }
-        .pm-proj-add button { background: var(--gold); border:none; border-radius:6px; padding: 0 9px; cursor:pointer; font-weight:700; }
+        .pm-proj-add input { flex:1; min-width:0; background: rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; border-radius:6px; padding:6px 8px; font-size:12px; outline:none; }
+        .pm-proj-add input::placeholder { color:rgba(255,255,255,0.45); }
+        .pm-proj-add button { background: rgba(255,255,255,0.22); border:none; border-radius:6px; padding: 0 11px; cursor:pointer; font-weight:700; color:#fff; font-size:16px; }
         .pm-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
         .pm-topbar { padding: 18px 28px 0; background: var(--paper); }
         .pm-topbar-row1 { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-        .pm-title { font-size: 23px; font-weight: 600; }
-        .pm-title .ruleline { display: block; width: 46px; height: 3px; background: var(--gold); margin-top: 6px; border-radius: 2px; }
+        .pm-title { font-size: 21px; font-weight: 700; color: var(--teal-deep); }
+        .pm-title .ruleline { display: block; width: 46px; height: 3px; background: var(--teal); margin-top: 6px; border-radius: 2px; }
         .pm-search { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; width: 200px; color: var(--muted); font-size: 13px; }
         .pm-search input { border: none; outline: none; background: transparent; width: 100%; font-size: 13px; }
         .pm-avatars { display: flex; }
         .pm-avatar { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11.5px; font-weight: 600; border: 2px solid var(--paper); margin-left: -8px; }
         .pm-btn-primary { display: flex; align-items: center; gap: 6px; background: var(--teal); color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
         .pm-btn-primary:hover { background: var(--teal-deep); }
-        .pm-btn-ghost { display:flex; align-items:center; gap:6px; background:transparent; border:1px solid var(--border); color: var(--ink); padding: 8px 12px; border-radius: 8px; font-size: 12.5px; cursor:pointer; }
+        .pm-btn-ghost { display:flex; align-items:center; gap:6px; background:transparent; border:1px solid var(--border); color: var(--teal-deep); padding: 8px 12px; border-radius: 8px; font-size: 12.5px; cursor:pointer; }
+        .pm-btn-ghost:hover { background: var(--paper-deep); }
         .pm-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
         .pm-tab { display: flex; align-items: center; gap: 6px; padding: 9px 14px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
-        .pm-tab.active { color: var(--ink); border-bottom: 2px solid var(--gold); font-weight: 600; }
+        .pm-tab.active { color: var(--teal-deep); border-bottom: 2px solid var(--teal); font-weight: 600; }
         .pm-board { flex: 1; display: flex; gap: 16px; padding: 18px 28px 22px; overflow-x: auto; }
         .pm-col { width: 270px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--paper-deep); border-radius: 12px; padding: 10px; max-height: 100%; }
-        .pm-col.dragover { outline: 2px dashed var(--gold); outline-offset: -4px; }
+        .pm-col.dragover { outline: 2px dashed var(--teal); outline-offset: -4px; }
         .pm-col-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 10px; }
         .pm-col-head-left { display: flex; align-items: baseline; gap: 7px; }
         .pm-col-no { font-size: 10.5px; color: var(--muted); }
@@ -552,15 +569,15 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-col-count { font-size: 11px; color: var(--muted); background: var(--card); border-radius: 999px; padding: 1px 7px; }
         .pm-col-bar { height: 3px; border-radius: 2px; margin: 0 6px 10px; }
         .pm-cards { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; padding: 0 2px 4px; }
-        .pm-card { background: var(--card); border-radius: 10px; padding: 11px 12px 10px; box-shadow: 0 1px 2px rgba(27,27,31,0.06); border: 1px solid var(--border); cursor: grab; position: relative; }
-        .pm-card:hover { border-color: #cfc8b4; }
+        .pm-card { background: var(--card); border-radius: 10px; padding: 11px 12px 10px; box-shadow: 0 1px 3px rgba(11,79,108,0.08); border: 1px solid var(--border); cursor: grab; position: relative; }
+        .pm-card:hover { border-color: #8BBFD9; box-shadow: 0 2px 8px rgba(11,79,108,0.12); }
         .pm-flag { position: absolute; top: 0; right: 12px; width: 10px; height: 16px; clip-path: polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%); }
         .pm-card-del { position: absolute; top: 8px; right: 28px; opacity: 0; color: var(--muted); cursor: pointer; }
         .pm-card:hover .pm-card-del { opacity: 1; }
         .pm-card-del:hover { color: #9C4221; }
         .pm-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.35; margin-bottom: 8px; padding-right: 14px; }
         .pm-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
-        .pm-label-chip { font-size: 10px; padding: 2px 7px; border-radius: 5px; background: #EEE9DC; color: #5C5747; font-weight: 600; }
+        .pm-label-chip { font-size: 10px; padding: 2px 7px; border-radius: 5px; background: #DAEEF9; color: #0B4F6C; font-weight: 600; }
         .pm-card-foot { display: flex; align-items: center; justify-content: space-between; }
         .pm-card-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
         .pm-card-meta-item { display: flex; align-items: center; gap: 3px; }
@@ -568,7 +585,7 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-card-team { display:flex; align-items:center; gap:4px; padding: 3px 8px; border-radius: 999px; color:#fff; font-size: 10px; font-weight: 700; max-width: 130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .pm-quickadd { padding: 4px 2px 2px; }
         .pm-quickadd input { width: 100%; box-sizing:border-box; border: 1px dashed var(--border); background: transparent; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
-        .pm-quickadd input:focus { border-color: var(--gold); background: var(--card); }
+        .pm-quickadd input:focus { border-color: var(--teal); background: var(--card); }
         .pm-overlay { position: fixed; inset: 0; background: rgba(27,27,31,0.32); display: flex; justify-content: flex-end; z-index: 50; }
         .pm-panel { width: 420px; max-width: 92vw; height: 100%; background: var(--card); padding: 22px 24px; overflow-y: auto; box-shadow: -8px 0 24px rgba(0,0,0,0.12); }
         .pm-panel-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
@@ -577,11 +594,11 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 5px; margin-top: 16px; }
         .pm-select, .pm-textarea, .pm-dateinput { width: 100%; box-sizing:border-box; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; }
         .pm-textarea { resize: vertical; min-height: 64px; }
-        .pm-delete-btn { margin-top: 22px; color: #9C4221; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+        .pm-delete-btn { margin-top: 22px; color: #DC2626; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
         .pm-comment { border-top: 1px solid var(--border); padding: 10px 0; }
         .pm-activity-row { display:flex; align-items:flex-start; gap: 7px; padding: 6px 0; }
-        .pm-activity-icon { color: var(--muted); margin-top: 3px; flex-shrink: 0; }
-        .pm-activity-detail { font-size: 12px; color: #5C5747; }
+        .pm-activity-icon { color: var(--teal); margin-top: 3px; flex-shrink: 0; }
+        .pm-activity-detail { font-size: 12px; color: #0B4F6C; }
         .pm-activity-time { font-size: 10.5px; color: var(--muted); }
         .pm-comment-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
         .pm-comment-avatar { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:9px; font-weight:700; }
@@ -594,13 +611,13 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-attachment-link { display:flex; align-items:center; gap:6px; font-size: 12px; color: var(--ink); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .pm-attachment-del { cursor:pointer; color: var(--muted); flex-shrink:0; }
         .pm-attachment-del:hover { color: #9C4221; }
-        .pm-error-banner { background:#FBEAE2; color:#9C4221; padding:8px 28px; font-size:12.5px; }
-        .pm-verify-banner { background:#FFF8E1; color:#7A5900; padding:8px 28px; font-size:12.5px; border-bottom: 1px solid #F0E0A0; }
+        .pm-error-banner { background:#FEE2E2; color:#991B1B; padding:8px 28px; font-size:12.5px; border-bottom: 1px solid #FECACA; }
+        .pm-verify-banner { background:#DBEAFE; color:#1E40AF; padding:8px 28px; font-size:12.5px; border-bottom: 1px solid #BFDBFE; }
         .pm-verify-link { font-weight:600; cursor:pointer; text-decoration:underline; }
         .pm-search-results { flex:1; overflow-y:auto; padding: 18px 28px; }
         .pm-search-header { font-size:12px; color:var(--muted); margin-bottom:10px; }
         .pm-search-task-row { display:flex; align-items:center; gap:10px; padding: 9px 12px; background:var(--card); border:1px solid var(--border); border-radius:9px; margin-bottom:7px; cursor:pointer; }
-        .pm-search-task-row:hover { border-color:#cfc8b4; }
+        .pm-search-task-row:hover { border-color: var(--teal); background: #F0F8FF; }
         .pm-search-status { font-size:10px; padding:2px 7px; border-radius:999px; color:#fff; font-weight:700; flex-shrink:0; }
         .pm-subtasks-wrap { margin-top: 14px; }
         .pm-subtask-row { display:flex; align-items:center; gap:8px; padding: 6px 0; border-bottom: 1px solid #F1EDE2; }
@@ -613,16 +630,21 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-subtask-row:hover .pm-subtask-del { opacity:1; }
         .pm-subtask-add { display:flex; gap:7px; margin-top:8px; }
         .pm-subtask-add input { flex:1; border:1px dashed var(--border); border-radius:7px; padding:6px 9px; font-size:12.5px; outline:none; }
-        .pm-subtask-add input:focus { border-color:var(--gold); background:var(--card); }
+        .pm-subtask-add input:focus { border-color:var(--teal); background:var(--card); }
         .pm-save-row { display:flex; justify-content:flex-end; margin-top:5px; }
       `}</style>
 
       <aside className="pm-sidebar">
         <div className="pm-sidebar-brand">
-          <div className="mark">L</div>
+          <img
+            src="https://i.ibb.co/fdDx5fKP/1200px-Metropolitan-Waterworks-and-Sewerage-System-MWSS-NAWASA-svg.png"
+            alt="MWSS Logo"
+            style={{ width: 54, height: 54, objectFit: "contain", filter: "brightness(0) invert(1)", flexShrink: 0 }}
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
           <div>
-            <div className="pm-serif" style={{ fontSize: 14.5, fontWeight: 600 }}>Ledgerline</div>
-            <div style={{ fontSize: 10.5, color: "#9B988F" }}>Project Workspace</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", letterSpacing: "0.02em" }}>MWSS RO</div>
+            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.55)" }}>Project Workspace</div>
           </div>
         </div>
 
@@ -666,10 +688,10 @@ export default function Dashboard({ token, user, onLogout }) {
           </>
         )}
 
-        <div style={{ marginTop: "auto", padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 9 }}>
+        <div style={{ marginTop: "auto", padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.12)", display: "flex", alignItems: "center", gap: 9 }}>
           <div className="pm-avatar" style={{ background: user.color, marginLeft: 0, border: "none" }}>{user.initials}</div>
-          <div style={{ fontSize: 12.5, flex: 1 }}>{user.name}</div>
-          <LogOut size={15} style={{ cursor: "pointer", color: "#9B988F" }} onClick={onLogout} />
+          <div style={{ fontSize: 12.5, flex: 1, color: "rgba(255,255,255,0.85)" }}>{user.name}</div>
+          <LogOut size={15} style={{ cursor: "pointer", color: "rgba(255,255,255,0.5)" }} onClick={onLogout} />
         </div>
       </aside>
 
@@ -1001,11 +1023,29 @@ export default function Dashboard({ token, user, onLogout }) {
               <Upload size={13} /> {uploading ? "Uploading…" : "Upload file"}
             </div>
 
-            <div className="pm-field-label">Activity</div>
+            <div className="pm-field-label" style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <span>Activity {activityFeed.length > 0 && `(${activityFeed.length})`}</span>
+              {activityFeed.length > ACTIVITY_PREVIEW && (
+                <span
+                  onClick={() => setShowAllActivity((v) => !v)}
+                  style={{ fontSize: 11, color: "var(--teal)", cursor: "pointer", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}
+                >
+                  {showAllActivity ? "Show less" : `Show all ${activityFeed.length}`}
+                </span>
+              )}
+            </div>
+
             {activityFeed.length === 0 && (
               <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>No activity yet.</div>
             )}
-            {activityFeed.map((item) =>
+
+            {!showAllActivity && activityFeed.length > ACTIVITY_PREVIEW && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 4, fontStyle: "italic" }}>
+                Showing the {ACTIVITY_PREVIEW} most recent updates.
+              </div>
+            )}
+
+            {visibleActivity.map((item) =>
               item.kind === "history" ? (
                 <div className="pm-activity-row" key={`h${item.id}`}>
                   <Clock size={11} className="pm-activity-icon" />
@@ -1025,6 +1065,16 @@ export default function Dashboard({ token, user, onLogout }) {
                 </div>
               )
             )}
+
+            {activityFeed.length > ACTIVITY_PREVIEW && !showAllActivity && (
+              <button
+                onClick={() => setShowAllActivity(true)}
+                style={{ marginTop: 6, width: "100%", background: "var(--paper-deep)", border: "1px solid var(--border)", borderRadius: 8, padding: "7px 0", fontSize: 12.5, color: "var(--teal)", fontWeight: 600, cursor: "pointer" }}
+              >
+                Show all {activityFeed.length} activity entries
+              </button>
+            )}
+
             <div className="pm-comment-add">
               <input placeholder="Write a comment…" value={newComment} onChange={(e) => setNewComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment()} />
               <button className="pm-btn-primary" onClick={postComment}>Post</button>
