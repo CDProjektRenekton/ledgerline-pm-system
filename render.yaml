@@ -31,6 +31,13 @@ services:
     envVars:
       - key: VITE_API_BASE
         value: https://pm-system-backend.onrender.com/api
+    headers:
+      - path: /*
+        name: Content-Security-Policy
+        value: "frame-ancestors 'self' https://sites.google.com https://*.googleusercontent.com https://*.google.com"
+      - path: /*
+        name: X-Frame-Options
+        value: ALLOWALL
     routes:
       - type: rewrite
         source: /*
