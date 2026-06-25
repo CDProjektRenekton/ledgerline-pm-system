@@ -32,7 +32,8 @@ export default function ListView({ tasks, onSelect }) {
             <th>Status</th>
             <th>Priority</th>
             <th>Assignee</th>
-            <th>Due</th>
+            <th>Start Date</th>
+            <th>Due Date</th>
             <th>Comments</th>
           </tr>
         </thead>
@@ -60,8 +61,11 @@ export default function ListView({ tasks, onSelect }) {
                   <span style={{ color: "var(--muted)" }}>Unassigned</span>
                 )}
               </td>
-              <td style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--muted)" }}>
-                <Calendar size={12} /> {formatDue(t.due_date)}
+              <td style={{ color: "var(--muted)" }}>
+                {t.start_date ? <span style={{ display:"flex", alignItems:"center", gap:5, color:"#10B981" }}><Calendar size={12} /> {formatDue(t.start_date)}</span> : "—"}
+              </td>
+              <td style={{ color: "var(--muted)" }}>
+                {t.due_date ? <span style={{ display:"flex", alignItems:"center", gap:5 }}><Calendar size={12} /> {formatDue(t.due_date)}</span> : "—"}
               </td>
               <td style={{ color: "var(--muted)" }}>
                 {Number(t.comment_count) > 0 && (

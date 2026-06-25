@@ -79,10 +79,27 @@ export default function Dashboard({ token, user, onLogout }) {
   const [error, setError] = useState("");
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Sidebar resize / collapse
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // New project modal
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [newProjName, setNewProjName] = useState("");
+  const [newProjDesc, setNewProjDesc] = useState("");
+  // New task modal
+  const [showNewTask, setShowNewTask] = useState(false);
+  const [newTaskStatus, setNewTaskStatus] = useState("todo");
+  const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"" });
+  // Card quick-action popover
+  const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
+  const [popoverComment, setPopoverComment] = useState("");
+
   const dragTaskId = useRef(null);
-  const dragOverInfo = useRef(null); // { columnId, targetTaskId, before }
+  const dragOverInfo = useRef(null);
   const socketRef = useRef(null);
   const fileInputRef = useRef(null);
+  const cardFileInputRef = useRef(null);
+  const isResizingSidebar = useRef(false);
 
   // Real-time connection: join the active project's room (+ this user's
   // personal room) and react to task/comment/notification events.
@@ -463,11 +480,29 @@ export default function Dashboard({ token, user, onLogout }) {
     }
   };
 
-  const createProject = async () => {
-    if (!newProjectName.trim()) return;
+  // Sidebar resize
+  const startSidebarResize = (e) => {
+    e.preventDefault();
+    isResizingSidebar.current = true;
+    const onMove = (ev) => {
+      if (!isResizingSidebar.current) return;
+      setSidebarWidth((w) => Math.max(160, Math.min(420, ev.clientX)));
+    };
+    const onUp = () => {
+      isResizingSidebar.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const submitNewProject = async () => {
+    if (!newProjName.trim()) return;
     try {
-      const proj = await api.createProject(token, newProjectName.trim(), "");
-      setNewProjectName("");
+      const proj = await api.createProject(token, newProjName.trim(), newProjDesc.trim());
+      setNewProjName(""); setNewProjDesc("");
+      setShowNewProject(false);
       setProjects((prev) => [proj, ...prev]);
       setActiveProject(proj);
     } catch (err) {
@@ -475,8 +510,64 @@ export default function Dashboard({ token, user, onLogout }) {
     }
   };
 
+  const openNewTask = (status = "todo") => {
+    setNewTaskStatus(status);
+    setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"" });
+    setShowNewTask(true);
+  };
+
+  const submitNewTask = async () => {
+    if (!newTaskForm.title.trim() || !activeProject) return;
+    try {
+      const payload = {
+        projectId: activeProject.id,
+        title: newTaskForm.title.trim(),
+        description: newTaskForm.description,
+        priority: newTaskForm.priority,
+        assigneeId: newTaskForm.assigneeId ? Number(newTaskForm.assigneeId) : undefined,
+        assigneeTeamId: newTaskForm.assigneeTeamId ? Number(newTaskForm.assigneeTeamId) : undefined,
+        startDate: newTaskForm.startDate || undefined,
+        dueDate: newTaskForm.dueDate || undefined,
+      };
+      await api.createTask(token, payload);
+      setShowNewTask(false);
+      refreshTasks();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  // Card quick-action popover helpers
+  const openCardPopover = (e, taskId, type) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setCardPopover({ taskId, type, x: rect.left, y: rect.bottom + 6 });
+    setPopoverComment("");
+  };
+
+  const closeCardPopover = () => setCardPopover(null);
+
+  const cardPopoverPatch = async (taskId, patch) => {
+    try {
+      await patchTask(taskId, patch);
+    } catch (err) { setError(err.message); }
+    closeCardPopover();
+  };
+
+  const submitCardComment = async () => {
+    if (!popoverComment.trim() || !cardPopover) return;
+    try {
+      await api.addComment(token, cardPopover.taskId, popoverComment.trim());
+      setPopoverComment("");
+      closeCardPopover();
+      refreshTasks();
+    } catch (err) { setError(err.message); }
+  };
+
+  const createProject = async () => { /* replaced by submitNewProject */ };
+
   const removeProject = async (e, project) => {
-    e.stopPropagation(); // don't also trigger "select project"
+    e.stopPropagation();
     const confirmed = window.confirm(
       `Delete "${project.name}"? This permanently deletes all of its tasks, comments, and teams. This can't be undone.`
     );
@@ -529,7 +620,12 @@ export default function Dashboard({ token, user, onLogout }) {
         }
         .pm-serif { font-family: 'Merriweather', serif; }
         .pm-mono { font-family: 'JetBrains Mono', monospace; }
-        .pm-sidebar { width: 240px; flex-shrink: 0; background: linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%); color: #E8F4FC; display: flex; flex-direction: column; }
+        .pm-sidebar { width: var(--sidebar-w, 240px); flex-shrink: 0; background: linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%); color: #E8F4FC; display: flex; flex-direction: column; transition: width 0.05s; overflow: hidden; position: relative; }
+        .pm-sidebar.collapsed { width: 0 !important; }
+        .pm-sidebar-resize { position:absolute; top:0; right:0; width:5px; height:100%; cursor:col-resize; z-index:10; background:transparent; }
+        .pm-sidebar-resize:hover { background:rgba(255,255,255,0.18); }
+        .pm-sidebar-toggle { position:fixed; left:var(--sidebar-w,240px); top:50%; transform:translateY(-50%) translateX(-50%); z-index:20; width:22px; height:44px; background:#1A7FA8; border:2px solid #fff; border-radius:999px; cursor:pointer; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,0.18); transition:left 0.05s; }
+        .pm-sidebar-toggle.collapsed { left:0; transform:translateY(-50%) translateX(50%); }
         .pm-sidebar-brand { padding: 16px 16px 14px; border-bottom: 1px solid rgba(255,255,255,0.12); display:flex; flex-direction:row; align-items:center; gap:10px; }
         .pm-sidebar-section { padding: 14px 20px 5px; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: rgba(255,255,255,0.5); }
         .pm-proj-item { margin: 2px 10px; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; display: flex; align-items: center; gap: 9px; cursor: pointer; color: rgba(255,255,255,0.82); }
@@ -595,7 +691,31 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-select, .pm-textarea, .pm-dateinput { width: 100%; box-sizing:border-box; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; }
         .pm-textarea { resize: vertical; min-height: 64px; }
         .pm-delete-btn { margin-top: 22px; color: #DC2626; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
-        .pm-comment { border-top: 1px solid var(--border); padding: 10px 0; }
+        .pm-card-actions { display:flex; gap:4px; margin-top:8px; opacity:0; transition:opacity 0.15s; }
+        .pm-card:hover .pm-card-actions { opacity:1; }
+        .pm-card-action-btn { flex:1; border:1px solid var(--border); background:var(--paper-deep); border-radius:6px; padding:4px 0; font-size:10px; color:var(--teal-deep); cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; font-weight:600; transition:background 0.12s, border-color 0.12s; }
+        .pm-card-action-btn:hover { background:var(--teal); color:#fff; border-color:var(--teal); }
+        .pm-card-popover { position:fixed; z-index:200; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 32px rgba(11,79,108,0.18); min-width:180px; padding:8px; }
+        .pm-pop-option { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:7px; cursor:pointer; font-size:13px; }
+        .pm-pop-option:hover { background:var(--paper-deep); }
+        .pm-pop-option.active { font-weight:700; color:var(--teal-deep); }
+        .pm-pop-textarea { width:100%; border:1px solid var(--border); border-radius:8px; padding:7px 9px; font-size:12.5px; font-family:'Inter',sans-serif; resize:none; outline:none; margin-bottom:7px; }
+        .pm-pop-textarea:focus { border-color:var(--teal); }
+        .pm-pop-close { position:absolute; top:6px; right:8px; cursor:pointer; color:var(--muted); font-size:16px; line-height:1; }
+        .pm-modal-overlay { position:fixed; inset:0; background:rgba(11,79,108,0.28); z-index:100; display:flex; align-items:center; justify-content:center; padding:16px; }
+        .pm-modal { background:#fff; border-radius:16px; width:100%; max-width:460px; max-height:88vh; overflow-y:auto; box-shadow:0 12px 48px rgba(11,79,108,0.22); }
+        .pm-modal-head { display:flex; justify-content:space-between; align-items:center; padding:20px 24px 0; }
+        .pm-modal-title { font-size:18px; font-weight:700; color:var(--teal-deep); }
+        .pm-modal-body { padding:16px 24px 24px; }
+        .pm-field-row { margin-bottom:14px; }
+        .pm-field-row label { display:block; font-size:11.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:5px; }
+        .pm-field-row input, .pm-field-row select, .pm-field-row textarea { width:100%; border:1.5px solid var(--border); border-radius:9px; padding:9px 12px; font-size:13.5px; font-family:'Inter',sans-serif; outline:none; background:#fff; transition:border-color 0.15s; }
+        .pm-field-row input:focus, .pm-field-row select:focus, .pm-field-row textarea:focus { border-color:var(--teal); }
+        .pm-field-row textarea { resize:vertical; min-height:72px; }
+        .pm-field-row-2col { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+        .pm-modal-footer { display:flex; gap:10px; justify-content:flex-end; padding-top:6px; }
+        .pm-btn-cancel { padding:9px 18px; border-radius:9px; border:1.5px solid var(--border); background:#fff; font-size:13.5px; font-weight:600; cursor:pointer; color:var(--muted); }
+        .pm-btn-cancel:hover { background:var(--paper-deep); }
         .pm-activity-row { display:flex; align-items:flex-start; gap: 7px; padding: 6px 0; }
         .pm-activity-icon { color: var(--teal); margin-top: 3px; flex-shrink: 0; }
         .pm-activity-detail { font-size: 12px; color: #0B4F6C; }
@@ -634,17 +754,20 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-save-row { display:flex; justify-content:flex-end; margin-top:5px; }
       `}</style>
 
-      <aside className="pm-sidebar">
-        <div className="pm-sidebar-brand">
+      <aside
+        className={`pm-sidebar${sidebarCollapsed ? " collapsed" : ""}`}
+        style={{ "--sidebar-w": `${sidebarWidth}px`, width: sidebarCollapsed ? 0 : sidebarWidth }}
+      >
+        <div className="pm-sidebar-brand" style={{ opacity: sidebarCollapsed ? 0 : 1 }}>
           <img
             src="https://i.ibb.co/fdDx5fKP/1200px-Metropolitan-Waterworks-and-Sewerage-System-MWSS-NAWASA-svg.png"
             alt="MWSS Logo"
-            style={{ width: 54, height: 54, objectFit: "contain", flexShrink: 0 }}
+            style={{ width: 46, height: 46, objectFit: "contain", flexShrink: 0 }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", letterSpacing: "0.02em" }}>MWSS RO</div>
-            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.55)" }}>Project Workspace</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#fff", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>MWSS RO</div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap" }}>Project Workspace</div>
           </div>
         </div>
 
@@ -655,7 +778,7 @@ export default function Dashboard({ token, user, onLogout }) {
             className={`pm-proj-item ${activeProject && activeProject.id === p.id ? "active" : ""}`}
             onClick={() => setActiveProject(p)}
           >
-            <span className="pm-proj-dot" style={{ background: "#C9A227" }} />
+            <span className="pm-proj-dot" style={{ background: "#5CC8F0" }} />
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
             <Archive size={12} className="pm-proj-del" title="Archive" onClick={(e) => { e.stopPropagation(); archiveProject(p.id, true); }} />
             {p.my_role === "owner" && (
@@ -663,24 +786,25 @@ export default function Dashboard({ token, user, onLogout }) {
             )}
           </div>
         ))}
-        <div className="pm-proj-add">
-          <input
-            placeholder="New project…"
-            value={newProjectName}
-            onChange={(e) => setNewProjectName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && createProject()}
-          />
-          <button onClick={createProject}>+</button>
+
+        {/* New Project button */}
+        <div style={{ padding: "8px 12px" }}>
+          <button
+            onClick={() => { setNewProjName(""); setNewProjDesc(""); setShowNewProject(true); }}
+            style={{ width:"100%", background:"rgba(255,255,255,0.14)", border:"1.5px dashed rgba(255,255,255,0.3)", borderRadius:9, padding:"8px 0", color:"#fff", fontSize:12.5, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+          >
+            <Plus size={14} /> New Project
+          </button>
         </div>
 
         {activeProject && (
           <>
             <div className="pm-sidebar-section">Workspace</div>
             <div className="pm-proj-item" onClick={() => setShowMembersPanel(true)}>
-              <UserCog size={13} /> Members {members.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{members.length}</span>}
+              <UserCog size={13} /> Members {members.length > 0 && <span style={{ color: "rgba(255,255,255,0.5)", marginLeft: "auto" }}>{members.length}</span>}
             </div>
             <div className="pm-proj-item" onClick={() => setShowTeamsPanel(true)}>
-              <Users size={13} /> Teams {teams.length > 0 && <span style={{ color: "#9B988F", marginLeft: "auto" }}>{teams.length}</span>}
+              <Users size={13} /> Teams {teams.length > 0 && <span style={{ color: "rgba(255,255,255,0.5)", marginLeft: "auto" }}>{teams.length}</span>}
             </div>
             <div className="pm-proj-item" onClick={() => setShowArchived(true)}>
               <Archive size={13} /> Archived
@@ -688,12 +812,25 @@ export default function Dashboard({ token, user, onLogout }) {
           </>
         )}
 
-        <div style={{ marginTop: "auto", padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.12)", display: "flex", alignItems: "center", gap: 9 }}>
-          <div className="pm-avatar" style={{ background: user.color, marginLeft: 0, border: "none" }}>{user.initials}</div>
-          <div style={{ fontSize: 12.5, flex: 1, color: "rgba(255,255,255,0.85)" }}>{user.name}</div>
-          <LogOut size={15} style={{ cursor: "pointer", color: "rgba(255,255,255,0.5)" }} onClick={onLogout} />
+        <div style={{ marginTop: "auto", padding: "14px 16px", borderTop: "1px solid rgba(255,255,255,0.12)", display: "flex", alignItems: "center", gap: 9 }}>
+          <div className="pm-avatar" style={{ background: user.color, marginLeft: 0, border: "none", flexShrink: 0 }}>{user.initials}</div>
+          <div style={{ fontSize: 12, flex: 1, color: "rgba(255,255,255,0.85)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</div>
+          <LogOut size={14} style={{ cursor: "pointer", color: "rgba(255,255,255,0.5)", flexShrink: 0 }} onClick={onLogout} />
         </div>
+
+        {/* Resize handle */}
+        <div className="pm-sidebar-resize" onMouseDown={startSidebarResize} />
       </aside>
+
+      {/* Sidebar collapse/expand toggle */}
+      <div
+        className={`pm-sidebar-toggle${sidebarCollapsed ? " collapsed" : ""}`}
+        style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
+        onClick={() => setSidebarCollapsed((v) => !v)}
+        title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+      >
+        {sidebarCollapsed ? "›" : "‹"}
+      </div>
 
       <div className="pm-main">
         {error && <div className="pm-error-banner">{error} <span style={{cursor:"pointer", fontWeight:600}} onClick={() => setError("")}> Dismiss</span></div>}
@@ -737,7 +874,7 @@ export default function Dashboard({ token, user, onLogout }) {
                 onMarkRead={markNotificationRead}
                 onMarkAllRead={markAllNotificationsRead}
               />
-              <button className="pm-btn-primary" onClick={() => addTask("todo", "New task")} disabled={!activeProject}>
+              <button className="pm-btn-primary" onClick={() => openNewTask("todo")} disabled={!activeProject}>
                 <Plus size={15} /> New Task
               </button>
             </div>
@@ -823,6 +960,7 @@ export default function Dashboard({ token, user, onLogout }) {
                         )}
                         <div className="pm-card-foot">
                           <div className="pm-card-meta">
+                            {t.start_date && <span className="pm-card-meta-item" style={{color:"#10B981"}}><Calendar size={11} /> {formatDue(t.start_date)}</span>}
                             {t.due_date && <span className="pm-card-meta-item"><Calendar size={11} /> {formatDue(t.due_date)}</span>}
                             {Number(t.comment_count) > 0 && <span className="pm-card-meta-item"><MessageSquare size={11} /> {t.comment_count}</span>}
                             {Number(t.attachment_count) > 0 && <span className="pm-card-meta-item"><Paperclip size={11} /> {t.attachment_count}</span>}
@@ -835,6 +973,14 @@ export default function Dashboard({ token, user, onLogout }) {
                             <div className="pm-card-avatar" style={{ background: t.assignee_color }}>{t.assignee_initials}</div>
                           ) : null}
                         </div>
+                        {/* Shortcut action buttons — appear on card hover */}
+                        <div className="pm-card-actions">
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "status")} title="Change Status">⟳ Status</button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "priority")} title="Change Priority">⚑ Priority</button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee">👤 Assign</button>
+                          <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment">📎 File</button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment">💬 Comment</button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -844,7 +990,8 @@ export default function Dashboard({ token, user, onLogout }) {
                       placeholder="+ Add a task…"
                       value={quickAdd[col.id] || ""}
                       onChange={(e) => setQuickAdd((q) => ({ ...q, [col.id]: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") addTask(col.id, quickAdd[col.id] || ""); }}
+                      onFocus={() => { openNewTask(col.id); setQuickAdd((q) => ({ ...q, [col.id]: "" })); }}
+                      readOnly
                     />
                   </div>
                 </div>
@@ -863,6 +1010,206 @@ export default function Dashboard({ token, user, onLogout }) {
           </div>
         )}
       </div>
+
+      {/* ── New Project Modal ── */}
+      {showNewProject && (
+        <div className="pm-modal-overlay" onClick={() => setShowNewProject(false)}>
+          <div className="pm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">New Project</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowNewProject(false)} />
+            </div>
+            <div className="pm-modal-body">
+              <div className="pm-field-row">
+                <label>Project Name *</label>
+                <input
+                  autoFocus
+                  placeholder="e.g. Water Distribution Upgrade"
+                  value={newProjName}
+                  onChange={(e) => setNewProjName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitNewProject()}
+                />
+              </div>
+              <div className="pm-field-row">
+                <label>Description (optional)</label>
+                <textarea
+                  placeholder="Brief description of this project…"
+                  value={newProjDesc}
+                  onChange={(e) => setNewProjDesc(e.target.value)}
+                  rows={3}
+                />
+              </div>
+              <div className="pm-modal-footer">
+                <button className="pm-btn-cancel" onClick={() => setShowNewProject(false)}>Cancel</button>
+                <button className="pm-btn-primary" onClick={submitNewProject} disabled={!newProjName.trim()}>
+                  <Plus size={14} /> Create Project
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── New Task Modal ── */}
+      {showNewTask && (
+        <div className="pm-modal-overlay" onClick={() => setShowNewTask(false)}>
+          <div className="pm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">Create New Task</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowNewTask(false)} />
+            </div>
+            <div className="pm-modal-body">
+              <div className="pm-field-row">
+                <label>Task Title *</label>
+                <input
+                  autoFocus
+                  placeholder="What needs to be done?"
+                  value={newTaskForm.title}
+                  onChange={(e) => setNewTaskForm((f) => ({ ...f, title: e.target.value }))}
+                />
+              </div>
+              <div className="pm-field-row">
+                <label>Description</label>
+                <textarea
+                  placeholder="Add more details…"
+                  value={newTaskForm.description}
+                  onChange={(e) => setNewTaskForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={3}
+                />
+              </div>
+              <div className="pm-field-row-2col">
+                <div className="pm-field-row" style={{ marginBottom:0 }}>
+                  <label>Status</label>
+                  <select value={newTaskStatus} onChange={(e) => setNewTaskStatus(e.target.value)}>
+                    {COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div className="pm-field-row" style={{ marginBottom:0 }}>
+                  <label>Priority</label>
+                  <select value={newTaskForm.priority} onChange={(e) => setNewTaskForm((f) => ({ ...f, priority: e.target.value }))}>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              </div>
+              <div className="pm-field-row">
+                <label>Assignee</label>
+                <select
+                  value={newTaskForm.assigneeTeamId ? `team-${newTaskForm.assigneeTeamId}` : newTaskForm.assigneeId ? `user-${newTaskForm.assigneeId}` : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) setNewTaskForm((f) => ({ ...f, assigneeId:"", assigneeTeamId:"" }));
+                    else if (v.startsWith("team-")) setNewTaskForm((f) => ({ ...f, assigneeTeamId: v.slice(5), assigneeId:"" }));
+                    else setNewTaskForm((f) => ({ ...f, assigneeId: v.slice(5), assigneeTeamId:"" }));
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  {members.length > 0 && <optgroup label="People">{members.map((m) => <option key={m.id} value={`user-${m.id}`}>{m.name}</option>)}</optgroup>}
+                  {teams.length > 0 && <optgroup label="Teams">{teams.map((t) => <option key={t.id} value={`team-${t.id}`}>{t.name}</option>)}</optgroup>}
+                </select>
+              </div>
+              <div className="pm-field-row-2col">
+                <div className="pm-field-row" style={{ marginBottom:0 }}>
+                  <label>Start Date</label>
+                  <input type="date" value={newTaskForm.startDate} onChange={(e) => setNewTaskForm((f) => ({ ...f, startDate: e.target.value }))} />
+                </div>
+                <div className="pm-field-row" style={{ marginBottom:0 }}>
+                  <label>Due Date</label>
+                  <input type="date" value={newTaskForm.dueDate} onChange={(e) => setNewTaskForm((f) => ({ ...f, dueDate: e.target.value }))} />
+                </div>
+              </div>
+              <div className="pm-modal-footer" style={{ marginTop:18 }}>
+                <button className="pm-btn-cancel" onClick={() => setShowNewTask(false)}>Cancel</button>
+                <button className="pm-btn-primary" onClick={submitNewTask} disabled={!newTaskForm.title.trim()}>
+                  <Plus size={14} /> Create Task
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Card Quick-Action Popover ── */}
+      {cardPopover && (() => {
+        const t = tasks.find((x) => x.id === cardPopover.taskId);
+        if (!t) return null;
+        return (
+          <div
+            style={{ position:"fixed", inset:0, zIndex:150 }}
+            onClick={closeCardPopover}
+          >
+            <div
+              className="pm-card-popover"
+              style={{ top: Math.min(cardPopover.y, window.innerHeight - 240), left: Math.min(cardPopover.x, window.innerWidth - 210) }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontWeight:700, fontSize:11.5, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6, paddingBottom:6, borderBottom:"1px solid var(--border)" }}>
+                {cardPopover.type === "status" ? "Change Status" :
+                 cardPopover.type === "priority" ? "Change Priority" :
+                 cardPopover.type === "assignee" ? "Change Assignee" : "Write Comment"}
+              </div>
+
+              {cardPopover.type === "status" && COLUMNS.map((c) => (
+                <div key={c.id} className={`pm-pop-option ${t.status===c.id?"active":""}`}
+                  onClick={() => cardPopoverPatch(t.id, { status: c.id })}>
+                  <span style={{ width:9, height:9, borderRadius:"50%", background:c.accent, display:"inline-block", flexShrink:0 }} />
+                  {c.label} {t.status===c.id && "✓"}
+                </div>
+              ))}
+
+              {cardPopover.type === "priority" && ["high","medium","low"].map((p) => (
+                <div key={p} className={`pm-pop-option ${t.priority===p?"active":""}`}
+                  onClick={() => cardPopoverPatch(t.id, { priority: p })}>
+                  <span style={{ width:9, height:9, borderRadius:"50%", background:PRIORITY_COLOR[p], display:"inline-block", flexShrink:0 }} />
+                  {p.charAt(0).toUpperCase()+p.slice(1)} {t.priority===p && "✓"}
+                </div>
+              ))}
+
+              {cardPopover.type === "assignee" && (
+                <>
+                  <div className="pm-pop-option" onClick={() => cardPopoverPatch(t.id, { assigneeId:null, assigneeTeamId:null })}>
+                    — Unassigned {!t.assignee_id && !t.assignee_team_id && "✓"}
+                  </div>
+                  {members.length > 0 && <div style={{ fontSize:10.5, color:"var(--muted)", padding:"4px 10px", fontWeight:600, textTransform:"uppercase" }}>People</div>}
+                  {members.map((m) => (
+                    <div key={m.id} className={`pm-pop-option ${t.assignee_id===m.id?"active":""}`}
+                      onClick={() => cardPopoverPatch(t.id, { assigneeId: m.id })}>
+                      <span style={{ width:20, height:20, borderRadius:"50%", background:m.color, color:"#fff", fontSize:9, fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{m.initials}</span>
+                      {m.name} {t.assignee_id===m.id && "✓"}
+                    </div>
+                  ))}
+                  {teams.length > 0 && <div style={{ fontSize:10.5, color:"var(--muted)", padding:"4px 10px", fontWeight:600, textTransform:"uppercase" }}>Teams</div>}
+                  {teams.map((tm) => (
+                    <div key={tm.id} className={`pm-pop-option ${t.assignee_team_id===tm.id?"active":""}`}
+                      onClick={() => cardPopoverPatch(t.id, { assigneeTeamId: tm.id })}>
+                      <span style={{ width:9, height:9, borderRadius:3, background:tm.color, display:"inline-block", flexShrink:0 }} />
+                      {tm.name} {t.assignee_team_id===tm.id && "✓"}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {cardPopover.type === "comment" && (
+                <>
+                  <textarea
+                    className="pm-pop-textarea"
+                    autoFocus
+                    rows={3}
+                    placeholder="Write a comment…"
+                    value={popoverComment}
+                    onChange={(e) => setPopoverComment(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submitCardComment(); }}
+                  />
+                  <button className="pm-btn-primary" style={{ width:"100%", padding:"8px 0", fontSize:13 }} onClick={submitCardComment}>
+                    Post Comment
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {showArchived && (
         <div className="pm-overlay" onClick={() => setShowArchived(false)}>
@@ -1006,8 +1353,16 @@ export default function Dashboard({ token, user, onLogout }) {
               )}
             </select>
 
-            <div className="pm-field-label">Due date</div>
-            <input type="date" className="pm-dateinput" value={selectedTask.due_date ? selectedTask.due_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { dueDate: e.target.value })} />
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div>
+                <div className="pm-field-label">Start date</div>
+                <input type="date" className="pm-dateinput" value={selectedTask.start_date ? selectedTask.start_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { startDate: e.target.value })} />
+              </div>
+              <div>
+                <div className="pm-field-label">Due date</div>
+                <input type="date" className="pm-dateinput" value={selectedTask.due_date ? selectedTask.due_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { dueDate: e.target.value })} />
+              </div>
+            </div>
 
             <div className="pm-field-label">Attachments</div>
             {attachments.map((a) => (

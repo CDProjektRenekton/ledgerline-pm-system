@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS subtasks (
 
 -- New columns added to existing tables (idempotent)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS search_vector tsvector
   GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,''))) STORED;
 
