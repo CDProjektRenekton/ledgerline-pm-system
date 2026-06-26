@@ -131,18 +131,7 @@ export default function Login({ onAuthed, resetToken, verifyToken }) {
         .login-left-inner { position:relative; z-index:2; display:flex; flex-direction:column; align-items:center; max-width:400px; }
 
         /* Logo card */
-        .login-logo-card {
-          background:rgba(255,255,255,0.12);
-          backdrop-filter:blur(10px);
-          border:1px solid rgba(255,255,255,0.18);
-          border-radius:20px;
-          padding:22px 32px;
-          margin-bottom:28px;
-          width:100%;
-          display:flex; align-items:center; justify-content:center;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.15);
-        }
-        .login-logo-img { max-width:280px; height:auto; display:block; }
+        .login-logo-img { max-width:340px; height:auto; display:block; margin-bottom:28px; }
 
         /* Decorative pill */
         .login-pill {
@@ -264,15 +253,8 @@ export default function Login({ onAuthed, resetToken, verifyToken }) {
           </div>
 
           <div className="login-left-inner">
-            <div className="login-logo-card">
-              <img src={LOGO_HORIZ} alt="MWSS Logo" className="login-logo-img"
+            <img src={LOGO_HORIZ} alt="MWSS Logo" className="login-logo-img"
                 onError={(e) => { e.target.style.display="none"; }} />
-            </div>
-
-            <div className="login-pill">
-              <span className="login-pill-dot" />
-              MWSS Regional Office
-            </div>
 
             <div className="login-left-title">Project Management System</div>
             <div className="login-left-sub">
@@ -308,11 +290,8 @@ export default function Login({ onAuthed, resetToken, verifyToken }) {
         {/* ═══ RIGHT ═══ */}
         <div className="login-right">
           <div className="login-card">
-            <div className="login-card-badge">
-              🔐 {mode === "login" ? "Secure Sign-In" : mode === "register" ? "New Account" : mode === "forgot" ? "Password Reset" : "Set Password"}
-            </div>
             <div className="login-card-title">
-              {mode==="login"    ? "Welcome back"     :
+              {mode==="login"    ? "Welcome"          :
                mode==="register" ? "Create account"   :
                mode==="forgot"   ? "Forgot password?" : "New password"}
             </div>
