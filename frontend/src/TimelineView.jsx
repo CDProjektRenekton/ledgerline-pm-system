@@ -19,10 +19,11 @@ export default function TimelineView({ tasks, onSelect }) {
       const today = new Date();
       return { rangeStart: today, totalDays: 14 };
     }
-    const created = dated.map((t) => new Date(t.created_at));
-    const due = dated.map((t) => new Date(t.due_date));
-    const minDate = new Date(Math.min(...created, ...due));
-    const maxDate = new Date(Math.max(...created, ...due));
+    // Use start_date if available, otherwise created_at as the left anchor
+    const starts = dated.map((t) => new Date(t.start_date || t.created_at));
+    const due    = dated.map((t) => new Date(t.due_date));
+    const minDate = new Date(Math.min(...starts, ...due));
+    const maxDate = new Date(Math.max(...starts, ...due));
     const start = addDays(minDate, -1);
     const span = Math.max(dayDiff(start, addDays(maxDate, 2)), 10);
     return { rangeStart: start, totalDays: span };
@@ -63,28 +64,31 @@ export default function TimelineView({ tasks, onSelect }) {
         )}
 
         {dated.map((t) => {
-          const due = new Date(t.due_date);
-          const start = new Date(t.created_at);
+          const due   = new Date(t.due_date);
+          // Use start_date if set, otherwise fall back to created_at
+          const start = new Date(t.start_date || t.created_at);
           const offset = Math.max(dayDiff(rangeStart, start), 0);
-          const span = Math.max(dayDiff(start, due) + 1, 1);
+          const span   = Math.max(dayDiff(start, due) + 1, 1);
+          const assigneeLabel = t.assignee_name ? t.assignee_name.split(" ")[0] : t.team_name || "";
           return (
             <React.Fragment key={t.id}>
-              <div className="pm-tl-rowlabel" onClick={() => onSelect(t)}>{t.title}</div>
+              <div className="pm-tl-rowlabel" onClick={() => onSelect(t)}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 12.5 }}>{t.title}</div>
+                  {assigneeLabel && <div style={{ fontSize: 10.5, color: "#6B92AD", marginTop: 1 }}>{assigneeLabel}</div>}
+                </div>
+              </div>
               <div style={{ position: "relative", gridColumn: `2 / span ${totalDays}`, display: "grid", gridTemplateColumns: `repeat(${totalDays}, 36px)`, borderBottom: "1px solid var(--border)" }}>
                 {days.map((d, i) => (
                   <div key={i} className={`pm-tl-cell ${d.toDateString() === todayKey ? "today" : ""}`} />
                 ))}
                 <div
                   className="pm-tl-bar"
-                  style={{
-                    left: offset * 36 + 2,
-                    width: span * 36 - 4,
-                    background: STATUS_COLOR[t.status],
-                  }}
+                  style={{ left: offset * 36 + 2, width: span * 36 - 4, background: STATUS_COLOR[t.status] }}
                   onClick={() => onSelect(t)}
-                  title={t.title}
+                  title={`${t.title}${assigneeLabel ? ` · ${assigneeLabel}` : ""}`}
                 >
-                  {t.title}
+                  {t.title}{assigneeLabel ? ` · ${assigneeLabel}` : ""}
                 </div>
               </div>
             </React.Fragment>

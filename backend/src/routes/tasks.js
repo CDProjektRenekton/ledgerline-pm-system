@@ -131,7 +131,7 @@ router.get("/search", async (req, res) => {
 
 // Create a task — assignee can be a single user (assigneeId) OR a team (assigneeTeamId), not both.
 router.post("/", async (req, res) => {
-  const { projectId, title, description, priority, assigneeId, assigneeTeamId, dueDate, startDate } = req.body;
+  const { projectId, title, description, priority, assigneeId, assigneeTeamId, dueDate, startDate, category } = req.body;
   if (!projectId || !title) {
     return res.status(400).json({ error: "projectId and title are required" });
   }
@@ -143,9 +143,9 @@ router.post("/", async (req, res) => {
   const finalTeamId = assigneeTeamId || null;
 
   const result = await db.query(
-    `INSERT INTO tasks (project_id, title, description, priority, assignee_id, assignee_team_id, start_date, due_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [projectId, title, description || "", priority || "medium", finalAssigneeId, finalTeamId, startDate || null, dueDate || null]
+    `INSERT INTO tasks (project_id, title, description, priority, assignee_id, assignee_team_id, start_date, due_date, category)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [projectId, title, description || "", priority || "medium", finalAssigneeId, finalTeamId, startDate || null, dueDate || null, category || "simple"]
   );
   const task = result.rows[0];
   emitToProject(projectId, "task:created", task);
@@ -233,6 +233,7 @@ router.patch("/:id", async (req, res) => {
     description: "description" in body ? body.description : existing.description,
     status: "status" in body ? body.status : existing.status,
     priority: "priority" in body ? body.priority : existing.priority,
+    category: "category" in body ? body.category || "simple" : existing.category,
     start_date: "startDate" in body ? body.startDate || null : existing.start_date,
     due_date: "dueDate" in body ? body.dueDate || null : existing.due_date,
     position: "position" in body ? body.position : existing.position,
@@ -253,9 +254,9 @@ router.patch("/:id", async (req, res) => {
   const result = await db.query(
     `UPDATE tasks SET
        title=$1, description=$2, status=$3, priority=$4,
-       assignee_id=$5, assignee_team_id=$6, start_date=$7, due_date=$8, position=$9, updated_at=now()
-     WHERE id=$10 RETURNING *`,
-    [next.title, next.description, next.status, next.priority, next.assignee_id, next.assignee_team_id, next.start_date, next.due_date, next.position, id]
+       assignee_id=$5, assignee_team_id=$6, start_date=$7, due_date=$8, position=$9, category=$10, updated_at=now()
+     WHERE id=$11 RETURNING *`,
+    [next.title, next.description, next.status, next.priority, next.assignee_id, next.assignee_team_id, next.start_date, next.due_date, next.position, next.category, id]
   );
 
   const task = result.rows[0];
@@ -281,6 +282,9 @@ router.patch("/:id", async (req, res) => {
   if ("startDate" in body && String(existing.start_date) !== String(task.start_date)) {
     const dateLabel = task.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : null;
     await logHistory(task.id, req.user.id, "start_date_changed", dateLabel ? `Start date set to ${dateLabel}` : "Start date cleared");
+  }
+  if ("category" in body && existing.category !== task.category) {
+    await logHistory(task.id, req.user.id, "category_changed", `Category changed to ${task.category}`);
   }
   if (("assigneeId" in body && existing.assignee_id !== task.assignee_id) ||
       ("assigneeTeamId" in body && existing.assignee_team_id !== task.assignee_team_id)) {

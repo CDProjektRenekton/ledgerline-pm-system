@@ -19,6 +19,10 @@ import {
   Archive,
   CheckSquare,
   Square,
+  RotateCw,
+  Flag,
+  User,
+  Tag,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
@@ -89,10 +93,12 @@ export default function Dashboard({ token, user, onLogout }) {
   // New task modal
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTaskStatus, setNewTaskStatus] = useState("todo");
-  const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"" });
+  const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
   // Card quick-action popover
   const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
   const [popoverComment, setPopoverComment] = useState("");
+  const [newTaskFiles, setNewTaskFiles] = useState([]);
+  const newTaskFileRef = useRef(null);
 
   const dragTaskId = useRef(null);
   const dragOverInfo = useRef(null);
@@ -512,7 +518,7 @@ export default function Dashboard({ token, user, onLogout }) {
 
   const openNewTask = (status = "todo") => {
     setNewTaskStatus(status);
-    setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"" });
+    setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
     setShowNewTask(true);
   };
 
@@ -524,12 +530,19 @@ export default function Dashboard({ token, user, onLogout }) {
         title: newTaskForm.title.trim(),
         description: newTaskForm.description,
         priority: newTaskForm.priority,
+        category: newTaskForm.category,
         assigneeId: newTaskForm.assigneeId ? Number(newTaskForm.assigneeId) : undefined,
         assigneeTeamId: newTaskForm.assigneeTeamId ? Number(newTaskForm.assigneeTeamId) : undefined,
         startDate: newTaskForm.startDate || undefined,
         dueDate: newTaskForm.dueDate || undefined,
       };
-      await api.createTask(token, payload);
+      const created = await api.createTask(token, payload);
+      // Upload any files that were attached in the modal
+      for (const file of newTaskFiles) {
+        try { await api.uploadAttachment(token, created.id, file); }
+        catch (e) { console.error("File upload failed:", e.message); }
+      }
+      setNewTaskFiles([]);
       setShowNewTask(false);
       refreshTasks();
     } catch (err) {
@@ -691,9 +704,9 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-select, .pm-textarea, .pm-dateinput { width: 100%; box-sizing:border-box; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; }
         .pm-textarea { resize: vertical; min-height: 64px; }
         .pm-delete-btn { margin-top: 22px; color: #DC2626; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
-        .pm-card-actions { display:flex; gap:4px; margin-top:8px; opacity:0; transition:opacity 0.15s; }
+        .pm-card-actions { display:flex; gap:5px; margin-top:8px; opacity:0; transition:opacity 0.15s; }
         .pm-card:hover .pm-card-actions { opacity:1; }
-        .pm-card-action-btn { flex:1; border:1px solid var(--border); background:var(--paper-deep); border-radius:6px; padding:4px 0; font-size:10px; color:var(--teal-deep); cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; font-weight:600; transition:background 0.12s, border-color 0.12s; }
+        .pm-card-action-btn { width:28px; height:28px; border:1.5px solid var(--border); background:#fff; border-radius:7px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--teal); transition:background 0.12s, border-color 0.12s, color 0.12s; flex-shrink:0; }
         .pm-card-action-btn:hover { background:var(--teal); color:#fff; border-color:var(--teal); }
         .pm-card-popover { position:fixed; z-index:200; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 32px rgba(11,79,108,0.18); min-width:180px; padding:8px; }
         .pm-pop-option { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:7px; cursor:pointer; font-size:13px; }
@@ -953,11 +966,12 @@ export default function Dashboard({ token, user, onLogout }) {
                           }}
                         />
                         <div className="pm-card-title">{t.title}</div>
-                        {t.labels && t.labels.length > 0 && (
-                          <div className="pm-labels">
-                            {t.labels.map((l) => <span className="pm-label-chip" key={l.id}>{l.name}</span>)}
-                          </div>
-                        )}
+                        <div className="pm-labels">
+                          {t.category && t.category === "complex" && (
+                            <span style={{ fontSize:10, padding:"2px 7px", borderRadius:5, background:"#FEF3C7", color:"#92400E", fontWeight:700, border:"1px solid #FDE68A" }}>Complex</span>
+                          )}
+                          {t.labels && t.labels.map((l) => <span className="pm-label-chip" key={l.id}>{l.name}</span>)}
+                        </div>
                         <div className="pm-card-foot">
                           <div className="pm-card-meta">
                             {t.start_date && <span className="pm-card-meta-item" style={{color:"#10B981"}}><Calendar size={11} /> {formatDue(t.start_date)}</span>}
@@ -970,16 +984,21 @@ export default function Dashboard({ token, user, onLogout }) {
                               <Users size={10} /> {t.team_name}
                             </div>
                           ) : t.assignee_initials ? (
-                            <div className="pm-card-avatar" style={{ background: t.assignee_color }}>{t.assignee_initials}</div>
+                            <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+                              <div className="pm-card-avatar" style={{ background: t.assignee_color }}>{t.assignee_initials}</div>
+                              <span style={{ fontSize:10.5, color:"var(--muted)", fontWeight:500, maxWidth:70, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {t.assignee_name ? t.assignee_name.split(" ")[0] : ""}
+                              </span>
+                            </div>
                           ) : null}
                         </div>
-                        {/* Shortcut action buttons — appear on card hover */}
+                        {/* Shortcut action buttons — appear on card hover, icon-only */}
                         <div className="pm-card-actions">
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "status")} title="Change Status">⟳ Status</button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "priority")} title="Change Priority">⚑ Priority</button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee">👤 Assign</button>
-                          <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment">📎 File</button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment">💬 Comment</button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "status")} title="Change Status"><RotateCw size={13} /></button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "priority")} title="Change Priority"><Flag size={13} /></button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee"><User size={13} /></button>
+                          <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment"><Paperclip size={13} /></button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment"><MessageSquare size={13} /></button>
                         </div>
                       </div>
                     ))}
@@ -1119,8 +1138,42 @@ export default function Dashboard({ token, user, onLogout }) {
                   <input type="date" value={newTaskForm.dueDate} onChange={(e) => setNewTaskForm((f) => ({ ...f, dueDate: e.target.value }))} />
                 </div>
               </div>
+              <div className="pm-field-row">
+                <label>Category</label>
+                <select value={newTaskForm.category} onChange={(e) => setNewTaskForm((f) => ({ ...f, category: e.target.value }))}>
+                  <option value="simple">Simple</option>
+                  <option value="complex">Complex</option>
+                </select>
+              </div>
+              <div className="pm-field-row">
+                <label>Attach Files</label>
+                <input
+                  ref={newTaskFileRef}
+                  type="file"
+                  multiple
+                  style={{ display:"none" }}
+                  onChange={(e) => setNewTaskFiles(Array.from(e.target.files))}
+                />
+                <div
+                  onClick={() => newTaskFileRef.current?.click()}
+                  style={{ border:"1.5px dashed var(--border)", borderRadius:9, padding:"10px 14px", cursor:"pointer", color:"var(--muted)", fontSize:13, display:"flex", alignItems:"center", gap:8, background:"#F8FCFF" }}
+                >
+                  <Paperclip size={14} />
+                  {newTaskFiles.length === 0 ? "Click to attach files…" : `${newTaskFiles.length} file${newTaskFiles.length > 1 ? "s" : ""} selected`}
+                </div>
+                {newTaskFiles.length > 0 && (
+                  <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:5 }}>
+                    {newTaskFiles.map((f, i) => (
+                      <span key={i} style={{ fontSize:11, background:"var(--paper-deep)", border:"1px solid var(--border)", borderRadius:5, padding:"2px 8px", display:"flex", alignItems:"center", gap:4 }}>
+                        {f.name}
+                        <X size={10} style={{ cursor:"pointer" }} onClick={() => setNewTaskFiles((prev) => prev.filter((_, j) => j !== i))} />
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="pm-modal-footer" style={{ marginTop:18 }}>
-                <button className="pm-btn-cancel" onClick={() => setShowNewTask(false)}>Cancel</button>
+                <button className="pm-btn-cancel" onClick={() => { setShowNewTask(false); setNewTaskFiles([]); }}>Cancel</button>
                 <button className="pm-btn-primary" onClick={submitNewTask} disabled={!newTaskForm.title.trim()}>
                   <Plus size={14} /> Create Task
                 </button>
@@ -1327,6 +1380,12 @@ export default function Dashboard({ token, user, onLogout }) {
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+            </select>
+
+            <div className="pm-field-label">Category</div>
+            <select className="pm-select" value={selectedTask.category || "simple"} onChange={(e) => patchTask(selectedTask.id, { category: e.target.value })}>
+              <option value="simple">Simple</option>
+              <option value="complex">Complex</option>
             </select>
 
             <div className="pm-field-label">Assignee</div>

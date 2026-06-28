@@ -59,7 +59,7 @@ export default function CalendarView({ tasks, onSelect }) {
         .pm-cal-cell.empty { background: transparent; border: none; }
         .pm-cal-cell.today { border-color: var(--gold); border-width: 2px; }
         .pm-cal-daynum { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-        .pm-cal-task { font-size: 10.5px; padding: 3px 6px; border-radius: 5px; margin-bottom: 3px; background: var(--paper-deep); cursor: pointer; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pm-cal-task { font-size: 10.5px; padding: 3px 6px; border-radius: 5px; margin-bottom: 3px; background: var(--paper-deep); cursor: pointer; display: flex; align-items: center; gap: 4px; overflow: hidden; }
         .pm-cal-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
       `}</style>
 
@@ -82,12 +82,16 @@ export default function CalendarView({ tasks, onSelect }) {
           return (
             <div className={`pm-cal-cell ${key === todayKey ? "today" : ""}`} key={key}>
               <div className="pm-cal-daynum">{day}</div>
-              {dayTasks.slice(0, 3).map((t) => (
-                <div className="pm-cal-task" key={t.id} onClick={() => onSelect(t)} title={t.title}>
-                  <span className="pm-cal-dot" style={{ background: PRIORITY_COLOR[t.priority] }} />
-                  {t.title}
-                </div>
-              ))}
+              {dayTasks.slice(0, 3).map((t) => {
+                const assignee = t.assignee_name ? t.assignee_name.split(" ")[0] : t.team_name || "";
+                return (
+                  <div className="pm-cal-task" key={t.id} onClick={() => onSelect(t)} title={`${t.title}${assignee ? ` · ${assignee}` : ""}`}>
+                    <span className="pm-cal-dot" style={{ background: PRIORITY_COLOR[t.priority] }} />
+                    <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis" }}>{t.title}</span>
+                    {assignee && <span style={{ fontSize:9, color:"#6B92AD", fontWeight:600, flexShrink:0, marginLeft:2 }}>{assignee}</span>}
+                  </div>
+                );
+              })}
               {dayTasks.length > 3 && (
                 <div style={{ fontSize: 10, color: "var(--muted)" }}>+{dayTasks.length - 3} more</div>
               )}
