@@ -79,8 +79,13 @@ export const api = {
 
   listNotifications: (token) => request("/notifications", { token }),
   unreadNotificationCount: (token) => request("/notifications/unread-count", { token }),
+  notificationCounts: (token) => request("/notifications/counts", { token }),
   markNotificationRead: (token, id) => request(`/notifications/${id}/read`, { method: "PATCH", token }),
   markAllNotificationsRead: (token) => request("/notifications/read-all", { method: "PATCH", token }),
+
+  listMessages: (token, projectId) => request(`/messages?projectId=${projectId}`, { token }),
+  sendMessage: (token, projectId, body, taskRefId, mentionUserIds) =>
+    request("/messages", { method: "POST", body: { projectId, body, taskRefId, mentionUserIds }, token }),
 
   listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
   createTeam: (token, projectId, name, color) =>

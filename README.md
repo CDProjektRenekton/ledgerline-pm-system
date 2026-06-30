@@ -84,6 +84,9 @@ Demo login after seeding: `jister@example.com` / `password123`
 | GET    | /api/labels?projectId=ID          | List labels                   |
 | POST   | /api/labels                       | Create label                  |
 | GET    | /api/notifications                | My notifications               |
+| GET    | /api/notifications/counts         | Unread counts grouped by task/project (for red badges) |
+| GET    | /api/messages?projectId=ID        | Project chat history          |
+| POST   | /api/messages                     | Send a chat message (body: `body`, optional `taskRefId`, `mentionUserIds[]`) |
 | GET    | /api/notifications/unread-count   | Unread notification count     |
 | PATCH  | /api/notifications/:id/read       | Mark one notification read    |
 | PATCH  | /api/notifications/read-all       | Mark all notifications read   |
@@ -131,6 +134,9 @@ columns, add tasks, comment, reassign, set due dates. Every action is a real
 API call and persists in Postgres.
 
 ## What's implemented
+
+- **Project chat**: sidebar → Chat — a real-time message thread per project. Reference any task with the # picker, @mention any member (autocomplete as you type), mentioned users get notified instantly (in-app, in their notification bell, and via email-style log)
+- **Red notification badges**: unread counts shown on each project in the sidebar and on each task card in the Kanban board, clearing automatically when you open that task or project
 
 - JWT authentication (register/login, bcrypt-hashed passwords) with session restore on page reload
 - **Email verification on registration**: a 24-hour link is sent on sign-up; unverified users see a reminder banner with a resend option. The app remains usable while unverified (dev mode logs the link to the console instead of sending)

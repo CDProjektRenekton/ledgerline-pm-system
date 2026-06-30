@@ -32,6 +32,7 @@ import TimelineView from "./TimelineView.jsx";
 import TeamsPanel from "./TeamsPanel.jsx";
 import MembersPanel from "./MembersPanel.jsx";
 import NotificationBell from "./NotificationBell.jsx";
+import ChatPanel from "./ChatPanel.jsx";
 
 const COLUMNS = [
   { id: "todo",       label: "To Do",       no: "01", accent: "#6B92AD" },
@@ -83,6 +84,10 @@ export default function Dashboard({ token, user, onLogout }) {
   const [error, setError] = useState("");
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [taskUnreadCounts, setTaskUnreadCounts] = useState({});   // { taskId: n }
+  const [projectUnreadCounts, setProjectUnreadCounts] = useState({}); // { projectId: n }
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
   // Sidebar resize / collapse
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -161,6 +166,13 @@ export default function Dashboard({ token, user, onLogout }) {
     socket.on("notification:new", (n) => {
       setNotifications((prev) => [n, ...prev].slice(0, 50));
       setUnreadCount((c) => c + 1);
+      // Refresh badge counts
+      if (n.task_id) {
+        setTaskUnreadCounts((prev) => ({ ...prev, [n.task_id]: (prev[n.task_id] || 0) + 1 }));
+      }
+    });
+    socket.on("message:created", (msg) => {
+      setChatMessages((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]);
     });
 
     return () => socket.disconnect();
@@ -187,21 +199,32 @@ export default function Dashboard({ token, user, onLogout }) {
     })();
   }, [token]);
 
-  // Load the notification inbox once on mount
+  // Load the notification inbox + counts once on mount
   useEffect(() => {
     (async () => {
       try {
-        const [list, unread] = await Promise.all([
+        const [list, unread, counts] = await Promise.all([
           api.listNotifications(token),
           api.unreadNotificationCount(token),
+          api.notificationCounts(token),
         ]);
         setNotifications(list);
         setUnreadCount(unread.count);
+        setTaskUnreadCounts(counts.byTask || {});
+        setProjectUnreadCounts(counts.byProject || {});
       } catch (err) {
-        // non-fatal — bell just stays empty
+        // non-fatal
       }
     })();
   }, [token]);
+
+  const refreshNotifCounts = async () => {
+    try {
+      const counts = await api.notificationCounts(token);
+      setTaskUnreadCounts(counts.byTask || {});
+      setProjectUnreadCounts(counts.byProject || {});
+    } catch (_) {}
+  };
 
   // Load archived projects when the drawer is opened
   useEffect(() => {
@@ -235,6 +258,8 @@ export default function Dashboard({ token, user, onLogout }) {
   const markAllNotificationsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     setUnreadCount(0);
+    setTaskUnreadCounts({});
+    setProjectUnreadCounts({});
     try {
       await api.markAllNotificationsRead(token);
     } catch (err) {
@@ -287,6 +312,10 @@ export default function Dashboard({ token, user, onLogout }) {
     setEditTitle(selectedTask.title);
     setEditDesc(selectedTask.description || "");
     setShowAllActivity(false);
+    // Clear unread badge for this task
+    if (taskUnreadCounts[selectedTask.id]) {
+      setTaskUnreadCounts((prev) => { const n = { ...prev }; delete n[selectedTask.id]; return n; });
+    }
     (async () => {
       try {
         const [c, a, h, s] = await Promise.all([
@@ -384,7 +413,25 @@ export default function Dashboard({ token, user, onLogout }) {
     setSelectedTask((cur) => (cur && cur.id === id ? { ...cur, ...patch } : cur));
     try {
       const updated = await api.updateTask(token, id, patch);
-      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...updated } : t)));
+
+      // The PATCH response has raw IDs but no display fields (name/initials/color).
+      // Enrich with local member/team data so all views reflect the change instantly
+      // without needing a full task list refresh.
+      let enriched = { ...updated };
+      if ("assigneeId" in patch || "assigneeTeamId" in patch) {
+        if (updated.assignee_id) {
+          const m = members.find((x) => x.id === updated.assignee_id);
+          if (m) enriched = { ...enriched, assignee_name: m.name, assignee_initials: m.initials, assignee_color: m.color, assignee_team_id: null, team_name: null, team_color: null };
+        } else if (updated.assignee_team_id) {
+          const tm = teams.find((x) => x.id === updated.assignee_team_id);
+          if (tm) enriched = { ...enriched, assignee_id: null, assignee_name: null, assignee_initials: null, assignee_color: null, team_name: tm.name, team_color: tm.color };
+        } else {
+          enriched = { ...enriched, assignee_id: null, assignee_name: null, assignee_initials: null, assignee_color: null, assignee_team_id: null, team_name: null, team_color: null };
+        }
+      }
+
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...enriched } : t)));
+      setSelectedTask((cur) => (cur && cur.id === id ? { ...cur, ...enriched } : cur));
     } catch (err) {
       setError(err.message);
       refreshTasks();
@@ -708,7 +755,8 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-card:hover .pm-card-actions { opacity:1; }
         .pm-card-action-btn { width:28px; height:28px; border:1.5px solid var(--border); background:#fff; border-radius:7px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--teal); transition:background 0.12s, border-color 0.12s, color 0.12s; flex-shrink:0; }
         .pm-card-action-btn:hover { background:var(--teal); color:#fff; border-color:var(--teal); }
-        .pm-card-popover { position:fixed; z-index:200; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 32px rgba(11,79,108,0.18); min-width:180px; padding:8px; }
+        .pm-card-popover { position:fixed; z-index:200; background:#fff; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 32px rgba(11,79,108,0.18); min-width:200px; padding:8px; }
+        .pm-card-popover.type-comment { width:260px; min-width:260px; }
         .pm-pop-option { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:7px; cursor:pointer; font-size:13px; }
         .pm-pop-option:hover { background:var(--paper-deep); }
         .pm-pop-option.active { font-weight:700; color:var(--teal-deep); }
@@ -729,6 +777,9 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-modal-footer { display:flex; gap:10px; justify-content:flex-end; padding-top:6px; }
         .pm-btn-cancel { padding:9px 18px; border-radius:9px; border:1.5px solid var(--border); background:#fff; font-size:13.5px; font-weight:600; cursor:pointer; color:var(--muted); }
         .pm-btn-cancel:hover { background:var(--paper-deep); }
+        .pm-notif-badge { position:absolute; top:-5px; right:-5px; background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:16px; height:16px; display:flex; align-items:center; justify-content:center; padding:0 3px; border:1.5px solid #fff; pointer-events:none; }
+        .pm-task-badge { position:absolute; top:-6px; right:-6px; background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:15px; height:15px; display:flex; align-items:center; justify-content:center; padding:0 2px; border:1.5px solid var(--card); pointer-events:none; z-index:2; }
+        .pm-proj-badge { background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:15px; height:15px; display:inline-flex; align-items:center; justify-content:center; padding:0 3px; margin-left:auto; flex-shrink:0; }
         .pm-activity-row { display:flex; align-items:flex-start; gap: 7px; padding: 6px 0; }
         .pm-activity-icon { color: var(--teal); margin-top: 3px; flex-shrink: 0; }
         .pm-activity-detail { font-size: 12px; color: #0B4F6C; }
@@ -793,6 +844,9 @@ export default function Dashboard({ token, user, onLogout }) {
           >
             <span className="pm-proj-dot" style={{ background: "#5CC8F0" }} />
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+            {projectUnreadCounts[p.id] > 0 && (
+              <span className="pm-proj-badge">{projectUnreadCounts[p.id] > 9 ? "9+" : projectUnreadCounts[p.id]}</span>
+            )}
             <Archive size={12} className="pm-proj-del" title="Archive" onClick={(e) => { e.stopPropagation(); archiveProject(p.id, true); }} />
             {p.my_role === "owner" && (
               <Trash2 size={12} className="pm-proj-del" title="Delete" onClick={(e) => removeProject(e, p)} />
@@ -821,6 +875,15 @@ export default function Dashboard({ token, user, onLogout }) {
             </div>
             <div className="pm-proj-item" onClick={() => setShowArchived(true)}>
               <Archive size={13} /> Archived
+            </div>
+            <div className="pm-proj-item" onClick={() => setShowChat(true)} style={{ position: "relative" }}>
+              <MessageSquare size={13} /> Chat
+              {chatMessages.filter((m) => m.project_id === activeProject?.id && m.author_id !== user.id).length > 0 && (
+                <span className="pm-proj-badge" style={{ marginLeft: "auto" }}>
+                  {chatMessages.filter((m) => m.project_id === activeProject?.id && m.author_id !== user.id).length > 9 ? "9+" :
+                   chatMessages.filter((m) => m.project_id === activeProject?.id && m.author_id !== user.id).length}
+                </span>
+              )}
             </div>
           </>
         )}
@@ -955,7 +1018,13 @@ export default function Dashboard({ token, user, onLogout }) {
                         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         onDrop={(e) => handleCardDrop(e, col.id, t)}
                         onClick={() => setSelectedTask(t)}
+                        style={{ position: "relative" }}
                       >
+                        {taskUnreadCounts[t.id] > 0 && (
+                          <span className="pm-task-badge">
+                            {taskUnreadCounts[t.id] > 9 ? "9+" : taskUnreadCounts[t.id]}
+                          </span>
+                        )}
                         <div className="pm-flag" style={{ background: PRIORITY_COLOR[t.priority] }} title={`${t.priority} priority`} />
                         <Trash2
                           size={12}
@@ -967,8 +1036,11 @@ export default function Dashboard({ token, user, onLogout }) {
                         />
                         <div className="pm-card-title">{t.title}</div>
                         <div className="pm-labels">
-                          {t.category && t.category === "complex" && (
+                          {t.category === "complex" && (
                             <span style={{ fontSize:10, padding:"2px 7px", borderRadius:5, background:"#FEF3C7", color:"#92400E", fontWeight:700, border:"1px solid #FDE68A" }}>Complex</span>
+                          )}
+                          {t.category === "simple" && (
+                            <span style={{ fontSize:10, padding:"2px 7px", borderRadius:5, background:"#D1FAE5", color:"#065F46", fontWeight:700, border:"1px solid #A7F3D0" }}>Simple</span>
                           )}
                           {t.labels && t.labels.map((l) => <span className="pm-label-chip" key={l.id}>{l.name}</span>)}
                         </div>
@@ -1193,8 +1265,11 @@ export default function Dashboard({ token, user, onLogout }) {
             onClick={closeCardPopover}
           >
             <div
-              className="pm-card-popover"
-              style={{ top: Math.min(cardPopover.y, window.innerHeight - 240), left: Math.min(cardPopover.x, window.innerWidth - 210) }}
+              className={`pm-card-popover${cardPopover.type === "comment" ? " type-comment" : ""}`}
+              style={{
+                top: Math.min(cardPopover.y, window.innerHeight - 200),
+                left: Math.min(cardPopover.x, window.innerWidth - (cardPopover.type === "comment" ? 270 : 215)),
+              }}
               onClick={(e) => e.stopPropagation()}
             >
               <div style={{ fontWeight:700, fontSize:11.5, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6, paddingBottom:6, borderBottom:"1px solid var(--border)" }}>
@@ -1499,6 +1574,23 @@ export default function Dashboard({ token, user, onLogout }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Chat Panel ── */}
+      {showChat && activeProject && (
+        <ChatPanel
+          token={token}
+          project={activeProject}
+          currentUser={user}
+          members={members}
+          tasks={tasks}
+          messages={chatMessages}
+          onClose={() => { setShowChat(false); setChatMessages([]); }}
+          onOpenTask={(taskId) => {
+            const t = tasks.find((x) => x.id === taskId);
+            if (t) { setSelectedTask(t); setShowChat(false); }
+          }}
+        />
       )}
     </div>
   );

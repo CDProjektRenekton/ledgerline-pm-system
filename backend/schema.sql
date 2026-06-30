@@ -155,7 +155,25 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'simpl
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS search_vector tsvector
   GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,''))) STORED;
 
-CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE TABLE IF NOT EXISTS project_messages (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  task_ref_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS message_mentions (
+  message_id INTEGER NOT NULL REFERENCES project_messages(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (message_id, user_id)
+);
+
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message_id INTEGER REFERENCES project_messages(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_project_messages_project ON project_messages(project_id);
+CREATE INDEX IF NOT EXISTS idx_message_mentions_user ON message_mentions(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_team ON tasks(assignee_team_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

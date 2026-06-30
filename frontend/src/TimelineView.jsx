@@ -42,7 +42,8 @@ export default function TimelineView({ tasks, onSelect }) {
         .pm-tl-track { position: relative; border-bottom: 1px solid var(--border); display: grid; }
         .pm-tl-cell { border-right: 1px solid #F1EDE2; }
         .pm-tl-cell.today { background: rgba(201,162,39,0.08); }
-        .pm-tl-bar { position: absolute; top: 6px; height: 18px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; padding: 0 8px; font-size: 10px; color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; }
+        .pm-tl-bar { position: absolute; top: 8px; height: 18px; border-radius: 6px; cursor: pointer; opacity: 0.88; transition: opacity .15s; }
+        .pm-tl-bar:hover { opacity: 1; box-shadow: 0 2px 8px rgba(11,79,108,0.25); }
         .pm-tl-header { display: contents; }
         .pm-tl-headlabel { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); background: var(--paper-deep); }
         .pm-tl-headtrack { display: grid; background: var(--paper-deep); border-bottom: 1px solid var(--border); }
@@ -65,7 +66,6 @@ export default function TimelineView({ tasks, onSelect }) {
 
         {dated.map((t) => {
           const due   = new Date(t.due_date);
-          // Use start_date if set, otherwise fall back to created_at
           const start = new Date(t.start_date || t.created_at);
           const offset = Math.max(dayDiff(rangeStart, start), 0);
           const span   = Math.max(dayDiff(start, due) + 1, 1);
@@ -73,23 +73,23 @@ export default function TimelineView({ tasks, onSelect }) {
           return (
             <React.Fragment key={t.id}>
               <div className="pm-tl-rowlabel" onClick={() => onSelect(t)}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 12.5 }}>{t.title}</div>
-                  {assigneeLabel && <div style={{ fontSize: 10.5, color: "#6B92AD", marginTop: 1 }}>{assigneeLabel}</div>}
-                </div>
+                <div style={{ fontWeight:600, fontSize:12.5, lineHeight:1.3 }}>{t.title}</div>
+                {assigneeLabel && (
+                  <div style={{ display:"inline-flex", alignItems:"center", gap:4, marginTop:3, background:"#DBEAFE", color:"#1D4ED8", borderRadius:999, padding:"2px 8px", fontSize:10.5, fontWeight:700 }}>
+                    👤 {assigneeLabel}
+                  </div>
+                )}
               </div>
-              <div style={{ position: "relative", gridColumn: `2 / span ${totalDays}`, display: "grid", gridTemplateColumns: `repeat(${totalDays}, 36px)`, borderBottom: "1px solid var(--border)" }}>
+              <div style={{ position:"relative", gridColumn:`2 / span ${totalDays}`, display:"grid", gridTemplateColumns:`repeat(${totalDays}, 36px)`, borderBottom:"1px solid var(--border)" }}>
                 {days.map((d, i) => (
                   <div key={i} className={`pm-tl-cell ${d.toDateString() === todayKey ? "today" : ""}`} />
                 ))}
                 <div
                   className="pm-tl-bar"
-                  style={{ left: offset * 36 + 2, width: span * 36 - 4, background: STATUS_COLOR[t.status] }}
+                  style={{ left:offset*36+2, width:span*36-4, background:STATUS_COLOR[t.status], borderRadius:6 }}
                   onClick={() => onSelect(t)}
                   title={`${t.title}${assigneeLabel ? ` · ${assigneeLabel}` : ""}`}
-                >
-                  {t.title}{assigneeLabel ? ` · ${assigneeLabel}` : ""}
-                </div>
+                />
               </div>
             </React.Fragment>
           );
