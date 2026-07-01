@@ -18,30 +18,31 @@ router.get("/", async (req, res) => {
   res.json(result.rows);
 });
 
-// POST /api/subtasks  { taskId, title }
+// POST /api/subtasks  { taskId, title, targetAt? }
 router.post("/", async (req, res) => {
-  const { taskId, title } = req.body;
+  const { taskId, title, targetAt } = req.body;
   if (!taskId || !title) return res.status(400).json({ error: "taskId and title are required" });
 
   const countResult = await db.query("SELECT COUNT(*) FROM subtasks WHERE task_id = $1", [taskId]);
   const position = Number(countResult.rows[0].count);
 
   const result = await db.query(
-    "INSERT INTO subtasks (task_id, title, position) VALUES ($1,$2,$3) RETURNING *",
-    [taskId, title.trim(), position]
+    "INSERT INTO subtasks (task_id, title, position, target_at) VALUES ($1,$2,$3,$4) RETURNING *",
+    [taskId, title.trim(), position, targetAt || null]
   );
 
   const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:created", result.rows[0]);
+    await logHistory(taskId, req.user.id, "subtask_added", `Subtask "${title.trim()}" added${targetAt ? ` (target: ${new Date(targetAt).toLocaleString()})` : ""}`);
   }
   res.status(201).json(result.rows[0]);
 });
 
-// PATCH /api/subtasks/:id  { title?, is_done? }
+// PATCH /api/subtasks/:id  { title?, is_done?, targetAt? }
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
-  const { title, is_done } = req.body;
+  const { title, is_done, targetAt } = req.body;
 
   const existing = await db.query("SELECT * FROM subtasks WHERE id = $1", [id]);
   if (existing.rows.length === 0) return res.status(404).json({ error: "Subtask not found" });
@@ -50,15 +51,15 @@ router.patch("/:id", async (req, res) => {
   const result = await db.query(
     `UPDATE subtasks SET
        title = COALESCE($1, title),
-       is_done = COALESCE($2, is_done)
-     WHERE id = $3 RETURNING *`,
-    [title !== undefined ? title.trim() : null, is_done !== undefined ? is_done : null, id]
+       is_done = COALESCE($2, is_done),
+       target_at = CASE WHEN $4 THEN $3 ELSE target_at END
+     WHERE id = $5 RETURNING *`,
+    [title !== undefined ? title.trim() : null, is_done !== undefined ? is_done : null, targetAt || null, "targetAt" in req.body, id]
   );
 
   const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [sub.task_id]);
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:updated", result.rows[0]);
-    // Log completion/uncompletion to the activity trail
     if (is_done !== undefined && is_done !== sub.is_done) {
       await logHistory(
         sub.task_id,

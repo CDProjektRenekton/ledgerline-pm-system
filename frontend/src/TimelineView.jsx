@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 
-const STATUS_COLOR = { todo: "#8B8680", inprogress: "#1F6F78", review: "#C9A227", done: "#3F7D52" };
+const STATUS_COLOR = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
+const SUBTASK_COLOR = "#8B5CF6";
 
 function addDays(date, n) {
   const d = new Date(date);
@@ -19,11 +20,14 @@ export default function TimelineView({ tasks, onSelect }) {
       const today = new Date();
       return { rangeStart: today, totalDays: 14 };
     }
-    // Use start_date if available, otherwise created_at as the left anchor
+    // Use start_date if available, otherwise created_at as the left anchor.
+    // Also widen the range to cover any subtask target dates so markers
+    // never fall outside the visible grid.
     const starts = dated.map((t) => new Date(t.start_date || t.created_at));
     const due    = dated.map((t) => new Date(t.due_date));
-    const minDate = new Date(Math.min(...starts, ...due));
-    const maxDate = new Date(Math.max(...starts, ...due));
+    const subDates = dated.flatMap((t) => (t.subtasks || []).filter((s) => s.target_at).map((s) => new Date(s.target_at)));
+    const minDate = new Date(Math.min(...starts, ...due, ...(subDates.length ? subDates : [Infinity])));
+    const maxDate = new Date(Math.max(...starts, ...due, ...(subDates.length ? subDates : [-Infinity])));
     const start = addDays(minDate, -1);
     const span = Math.max(dayDiff(start, addDays(maxDate, 2)), 10);
     return { rangeStart: start, totalDays: span };
@@ -37,23 +41,24 @@ export default function TimelineView({ tasks, onSelect }) {
       <style>{`
         .pm-tlwrap { padding: 18px 28px 22px; overflow: auto; flex: 1; }
         .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
-        .pm-tl-rowlabel { padding: 10px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; align-items: center; cursor: pointer; }
-        .pm-tl-rowlabel:hover { background: #FBF9F3; }
-        .pm-tl-track { position: relative; border-bottom: 1px solid var(--border); display: grid; }
-        .pm-tl-cell { border-right: 1px solid #F1EDE2; }
-        .pm-tl-cell.today { background: rgba(201,162,39,0.08); }
-        .pm-tl-bar { position: absolute; top: 8px; height: 18px; border-radius: 6px; cursor: pointer; opacity: 0.88; transition: opacity .15s; }
+        .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; }
+        .pm-tl-rowlabel:hover { background: #F4FAFE; }
+        .pm-tl-track { position: relative; border-bottom: 1px solid var(--border); display: grid; min-height: 48px; }
+        .pm-tl-cell { border-right: 1px solid #EEF6FC; }
+        .pm-tl-cell.today { background: rgba(26,127,168,0.08); }
+        .pm-tl-bar { position: absolute; top: 8px; height: 18px; border-radius: 6px; cursor: pointer; opacity: 0.9; transition: opacity .15s; }
         .pm-tl-bar:hover { opacity: 1; box-shadow: 0 2px 8px rgba(11,79,108,0.25); }
+        .pm-tl-submarker { position: absolute; top: 31px; width: 9px; height: 9px; border-radius: 2px; transform: rotate(45deg); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
         .pm-tl-header { display: contents; }
         .pm-tl-headlabel { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); background: var(--paper-deep); }
         .pm-tl-headtrack { display: grid; background: var(--paper-deep); border-bottom: 1px solid var(--border); }
-        .pm-tl-headday { font-size: 10px; color: var(--muted); text-align: center; padding: 8px 2px; border-right: 1px solid #F1EDE2; }
+        .pm-tl-headday { font-size: 10px; color: var(--muted); text-align: center; padding: 8px 2px; border-right: 1px solid #EEF6FC; }
       `}</style>
 
       <div className="pm-tl-table" style={{ gridTemplateColumns: `220px repeat(${totalDays}, 36px)` }}>
         <div className="pm-tl-headlabel">Task</div>
         {days.map((d, i) => (
-          <div className="pm-tl-headday" key={i} style={{ background: d.toDateString() === todayKey ? "#F3E9C7" : undefined }}>
+          <div className="pm-tl-headday" key={i} style={{ background: d.toDateString() === todayKey ? "#DBEAFE" : undefined }}>
             {d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           </div>
         ))}
@@ -70,6 +75,7 @@ export default function TimelineView({ tasks, onSelect }) {
           const offset = Math.max(dayDiff(rangeStart, start), 0);
           const span   = Math.max(dayDiff(start, due) + 1, 1);
           const assigneeLabel = t.assignee_name ? t.assignee_name.split(" ")[0] : t.team_name || "";
+          const subMarkers = (t.subtasks || []).filter((s) => s.target_at);
           return (
             <React.Fragment key={t.id}>
               <div className="pm-tl-rowlabel" onClick={() => onSelect(t)}>
@@ -80,7 +86,7 @@ export default function TimelineView({ tasks, onSelect }) {
                   </div>
                 )}
               </div>
-              <div style={{ position:"relative", gridColumn:`2 / span ${totalDays}`, display:"grid", gridTemplateColumns:`repeat(${totalDays}, 36px)`, borderBottom:"1px solid var(--border)" }}>
+              <div className="pm-tl-track" style={{ gridColumn:`2 / span ${totalDays}`, gridTemplateColumns:`repeat(${totalDays}, 36px)` }}>
                 {days.map((d, i) => (
                   <div key={i} className={`pm-tl-cell ${d.toDateString() === todayKey ? "today" : ""}`} />
                 ))}
@@ -90,11 +96,32 @@ export default function TimelineView({ tasks, onSelect }) {
                   onClick={() => onSelect(t)}
                   title={`${t.title}${assigneeLabel ? ` · ${assigneeLabel}` : ""}`}
                 />
+                {subMarkers.map((s) => {
+                  const sDate = new Date(s.target_at);
+                  const sOffset = dayDiff(rangeStart, sDate);
+                  if (sOffset < 0 || sOffset >= totalDays) return null;
+                  return (
+                    <div
+                      key={s.id}
+                      className="pm-tl-submarker"
+                      style={{ left: sOffset * 36 + 14, background: s.is_done ? "#A78BFA" : SUBTASK_COLOR, opacity: s.is_done ? 0.55 : 1 }}
+                      title={`Subtask: ${s.title}${s.is_done ? " (done)" : ""} — target ${sDate.toLocaleDateString()}`}
+                      onClick={(e) => { e.stopPropagation(); onSelect(t); }}
+                    />
+                  );
+                })}
               </div>
             </React.Fragment>
           );
         })}
       </div>
+
+      {dated.some((t) => (t.subtasks || []).some((s) => s.target_at)) && (
+        <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:10, fontSize:11.5, color:"var(--muted)" }}>
+          <span style={{ width:9, height:9, borderRadius:2, background:SUBTASK_COLOR, transform:"rotate(45deg)", display:"inline-block" }} />
+          Subtask target date
+        </div>
+      )}
     </div>
   );
 }

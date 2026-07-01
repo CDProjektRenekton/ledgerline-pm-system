@@ -207,5 +207,19 @@ router.get("/me", requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/auth/search-users?q=... — for member-invite autocomplete.
+// Matches name or email, case-insensitive, partial match. Capped at 8 results.
+router.get("/search-users", requireAuth, async (req, res) => {
+  const { q } = req.query;
+  if (!q || q.trim().length < 1) return res.json([]);
+  const result = await db.query(
+    `SELECT id, name, email, initials, color FROM users
+     WHERE (name ILIKE $1 OR email ILIKE $1) AND id != $2
+     ORDER BY name LIMIT 8`,
+    [`%${q.trim()}%`, req.user.id]
+  );
+  res.json(result.rows);
+});
+
 module.exports = router;
 module.exports.publicUser = publicUser;

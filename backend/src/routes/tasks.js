@@ -29,6 +29,23 @@ async function attachLabels(tasks) {
   return tasks.map((t) => ({ ...t, labels: byTask[t.id] || [] }));
 }
 
+// Bundles each task's subtasks (id, title, is_done, target_at) so the
+// frontend can plot them on Calendar/Timeline without extra round-trips.
+async function attachSubtasks(tasks) {
+  if (tasks.length === 0) return tasks;
+  const ids = tasks.map((t) => t.id);
+  const result = await db.query(
+    `SELECT id, task_id, title, is_done, target_at FROM subtasks WHERE task_id = ANY($1::int[]) ORDER BY position, created_at`,
+    [ids]
+  );
+  const byTask = {};
+  for (const row of result.rows) {
+    byTask[row.task_id] = byTask[row.task_id] || [];
+    byTask[row.task_id].push(row);
+  }
+  return tasks.map((t) => ({ ...t, subtasks: byTask[t.id] || [] }));
+}
+
 // Records a notification row, pushes it over the socket to that user in
 // real time, and fires an (async, non-blocking) assignment email.
 async function notifyAssignment(userId, task, assignedByName) {
@@ -91,7 +108,8 @@ router.get("/", async (req, res) => {
      ORDER BY t.status, t.position, t.created_at`,
     [projectId]
   );
-  const tasks = await attachLabels(result.rows);
+  let tasks = await attachLabels(result.rows);
+  tasks = await attachSubtasks(tasks);
   res.json(tasks);
 });
 

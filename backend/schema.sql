@@ -147,6 +147,19 @@ CREATE TABLE IF NOT EXISTS subtasks (
   position INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS target_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS project_invites (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_invites_user ON project_invites(user_id, status);
 
 -- New columns added to existing tables (idempotent)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT false;

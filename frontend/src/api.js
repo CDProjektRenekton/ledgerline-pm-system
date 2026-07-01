@@ -41,13 +41,22 @@ export const api = {
   resetPassword: (token, newPassword) =>
     request("/auth/reset-password", { method: "POST", body: { token, newPassword } }),
 
+  searchUsers: (token, q) => request(`/auth/search-users?q=${encodeURIComponent(q)}`, { token }),
+
   listProjects: (token) => request("/projects", { token }),
   listArchivedProjects: (token) => request("/projects/archived", { token }),
   createProject: (token, name, description) =>
     request("/projects", { method: "POST", body: { name, description }, token }),
   archiveProject: (token, id, is_archived) =>
     request(`/projects/${id}`, { method: "PATCH", body: { is_archived }, token }),
+  renameProject: (token, id, name, description) =>
+    request(`/projects/${id}`, { method: "PATCH", body: { name, description }, token }),
   deleteProject: (token, id) => request(`/projects/${id}`, { method: "DELETE", token }),
+  getProjectReport: (token, id) => request(`/projects/${id}/report`, { token }),
+
+  listPendingInvites: (token) => request("/projects/invites/pending", { token }),
+  acceptInvite: (token, inviteId) => request(`/projects/invites/${inviteId}/accept`, { method: "POST", token }),
+  declineInvite: (token, inviteId) => request(`/projects/invites/${inviteId}/decline`, { method: "POST", token }),
 
   listTasks: (token, projectId) => request(`/tasks?projectId=${projectId}`, { token }),
   searchTasks: (token, projectId, q) => request(`/tasks/search?projectId=${projectId}&q=${encodeURIComponent(q)}`, { token }),
@@ -59,8 +68,8 @@ export const api = {
     request("/tasks/reorder", { method: "POST", body: { projectId, status, orderedIds }, token }),
 
   listSubtasks: (token, taskId) => request(`/subtasks?taskId=${taskId}`, { token }),
-  createSubtask: (token, taskId, title) =>
-    request("/subtasks", { method: "POST", body: { taskId, title }, token }),
+  createSubtask: (token, taskId, title, targetAt) =>
+    request("/subtasks", { method: "POST", body: { taskId, title, targetAt }, token }),
   updateSubtask: (token, id, patch) =>
     request(`/subtasks/${id}`, { method: "PATCH", body: patch, token }),
   deleteSubtask: (token, id) => request(`/subtasks/${id}`, { method: "DELETE", token }),

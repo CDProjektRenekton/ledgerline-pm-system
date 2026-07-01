@@ -22,7 +22,7 @@ function renderBody(body, currentUserId) {
   });
 }
 
-export default function ChatPanel({ token, project, currentUser, members, tasks, messages: initialMessages = [], onClose, onOpenTask }) {
+export default function ChatPanel({ token, project, currentUser, members, tasks, messages: initialMessages = [], open, onToggleOpen, onOpenTask }) {
   const [messages, setMessages] = useState([]);
   const [body, setBody] = useState("");
   const [selectedTaskRef, setSelectedTaskRef] = useState(null);
@@ -32,6 +32,7 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
   const [mentionQuery, setMentionQuery] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [unseenCount, setUnseenCount] = useState(0);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -55,9 +56,17 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
       const ids = new Set(prev.map((m) => m.id));
       const extras = initialMessages.filter((m) => !ids.has(m.id));
       if (extras.length === 0) return prev;
+      if (!open) {
+        setUnseenCount((c) => c + extras.filter((m) => m.author_id !== currentUser.id).length);
+      }
       return [...prev, ...extras].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     });
   }, [initialMessages]);
+
+  // Clear the unseen badge whenever the panel is opened
+  useEffect(() => {
+    if (open) setUnseenCount(0);
+  }, [open]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -128,11 +137,19 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
   );
 
   return (
-    <div className="chat-panel">
+    <div className="chat-float-wrap">
       <style>{`
-        .chat-panel { display:flex; flex-direction:column; width:340px; height:100vh; max-height:100vh; background:#fff; border-left:1px solid var(--border); position:relative; }
-        .chat-head { padding:14px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#0B4F6C,#1A7FA8); flex-shrink:0; }
-        .chat-head-title { font-size:14px; font-weight:700; color:#fff; display:flex; align-items:center; gap:8px; }
+        /* z-index 45 — intentionally BELOW the task-detail overlay (z-index 50) and
+           modals (100+), so the floating chat is automatically covered/hidden
+           by the dim scrim whenever a side panel or modal is open. */
+        .chat-float-wrap { position: fixed; bottom: 22px; right: 22px; z-index: 45; display:flex; flex-direction:column; align-items:flex-end; }
+        .chat-launcher { width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,#1A7FA8,#0B4F6C); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 6px 20px rgba(11,79,108,0.35); color:#fff; position:relative; transition:transform .15s; }
+        .chat-launcher:hover { transform: scale(1.06); }
+        .chat-launcher-badge { position:absolute; top:-4px; right:-4px; background:#EF4444; color:#fff; font-size:10px; font-weight:800; border-radius:999px; min-width:20px; height:20px; display:flex; align-items:center; justify-content:center; padding:0 4px; border:2px solid #fff; }
+        .chat-panel { display:flex; flex-direction:column; width:360px; height:520px; max-height:75vh; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 16px 48px rgba(11,79,108,0.28); margin-bottom:14px; border:1px solid var(--border); }
+        .chat-head { padding:13px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#0B4F6C,#1A7FA8); flex-shrink:0; }
+        .chat-head-title { font-size:13.5px; font-weight:700; color:#fff; display:flex; align-items:center; gap:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chat-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
         .chat-messages { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; background:#F8FCFF; }
         .chat-bubble-wrap { display:flex; flex-direction:column; }
         .chat-bubble-wrap.mine { align-items:flex-end; }
@@ -168,125 +185,137 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
         .chat-error { font-size:12px; color:#DC2626; padding:6px 14px; }
       `}</style>
 
-      <div className="chat-head">
-        <div className="chat-head-title">
-          <span style={{ fontSize:18 }}>💬</span>
-          {project.name} — Chat
-        </div>
-        <X size={17} style={{ cursor:"pointer", color:"rgba(255,255,255,0.7)" }} onClick={onClose} />
-      </div>
-
-      <div className="chat-messages">
-        {messages.length === 0 && (
-          <div className="chat-empty">No messages yet. Start the conversation!</div>
-        )}
-        {messages.map((m) => {
-          const isMine = m.author_id === currentUser.id;
-          return (
-            <div className={`chat-bubble-wrap ${isMine ? "mine" : "other"}`} key={m.id}>
-              <div className={`chat-meta ${isMine ? "mine" : "other"}`}>
-                <div className="chat-avatar" style={{ background: m.author_color || "#1A7FA8" }}>
-                  {m.author_initials || m.author_name?.[0]}
-                </div>
-                <span className="chat-author">{isMine ? "You" : m.author_name}</span>
-                <span className="chat-time">{timeAgo(m.created_at)}</span>
-              </div>
-              <div className={`chat-bubble ${isMine ? "mine" : "other"}`}>
-                {m.task_ref_id && (
-                  <div
-                    className="chat-task-chip"
-                    onClick={() => onOpenTask && onOpenTask(m.task_ref_id)}
-                    title="Click to open task"
-                  >
-                    # {m.task_ref_title || `Task #${m.task_ref_id}`}
-                  </div>
-                )}
-                <div>{renderBody(m.body, currentUser.id)}</div>
-              </div>
+      {open && (
+        <div className="chat-panel">
+          <div className="chat-head">
+            <div className="chat-head-title">
+              <span style={{ fontSize:16 }}>💬</span>
+              {project.name}
             </div>
-          );
-        })}
-        <div ref={bottomRef} />
-      </div>
-
-      {error && <div className="chat-error">{error}</div>}
-
-      <div className="chat-input-wrap" style={{ position:"relative" }}>
-        {/* Task / mention pickers */}
-        {showTaskPicker && (
-          <div className="chat-picker">
-            <div className="chat-picker-label">Select a task to reference</div>
-            {tasks.slice(0, 20).map((t) => (
-              <div key={t.id} className="chat-picker-item" onClick={() => addTaskRef(t)}>
-                <span style={{ width:8, height:8, borderRadius:"50%", background:"#1A7FA8", display:"inline-block" }} />
-                {t.title}
-              </div>
-            ))}
+            <div className="chat-head-actions">
+              <X size={16} style={{ cursor:"pointer", color:"rgba(255,255,255,0.75)" }} onClick={onToggleOpen} />
+            </div>
           </div>
-        )}
-        {showMentionPicker && filteredMembers.length > 0 && (
-          <div className="chat-picker">
-            <div className="chat-picker-label">Mention a member</div>
-            {filteredMembers.map((m) => (
-              <div key={m.id} className="chat-picker-item" onClick={() => addMentionToBody(m)}>
-                <div className="chat-avatar" style={{ background: m.color }}>{m.initials}</div>
-                {m.name}
-              </div>
-            ))}
-          </div>
-        )}
 
-        <div className="chat-toolbar">
-          <button
-            className={`chat-tool-btn ${showTaskPicker ? "active" : ""}`}
-            onClick={() => { setShowTaskPicker((v) => !v); setShowMentionPicker(false); }}
-          >
-            <Hash size={13} /> Task
-          </button>
-          <button
-            className={`chat-tool-btn ${showMentionPicker ? "active" : ""}`}
-            onClick={() => { setShowMentionPicker((v) => !v); setShowTaskPicker(false); }}
-          >
-            <AtSign size={13} /> Mention
-          </button>
-        </div>
-
-        {selectedTaskRef && (
-          <div className="chat-ref-chip">
-            # {selectedTaskRef.title}
-            <X size={11} style={{ cursor:"pointer" }} onClick={() => setSelectedTaskRef(null)} />
-          </div>
-        )}
-        {mentionIds.length > 0 && (
-          <div className="chat-mention-chips">
-            {mentionIds.map((uid) => {
-              const m = members.find((x) => x.id === uid);
-              return m ? (
-                <span key={uid} className="chat-mention-chip">
-                  @{m.name.split(" ")[0]}
-                  <X size={10} style={{ cursor:"pointer" }} onClick={() => toggleMention(uid)} />
-                </span>
-              ) : null;
+          <div className="chat-messages">
+            {messages.length === 0 && (
+              <div className="chat-empty">No messages yet. Start the conversation!</div>
+            )}
+            {messages.map((m) => {
+              const isMine = m.author_id === currentUser.id;
+              return (
+                <div className={`chat-bubble-wrap ${isMine ? "mine" : "other"}`} key={m.id}>
+                  <div className={`chat-meta ${isMine ? "mine" : "other"}`}>
+                    <div className="chat-avatar" style={{ background: m.author_color || "#1A7FA8" }}>
+                      {m.author_initials || m.author_name?.[0]}
+                    </div>
+                    <span className="chat-author">{isMine ? "You" : m.author_name}</span>
+                    <span className="chat-time">{timeAgo(m.created_at)}</span>
+                  </div>
+                  <div className={`chat-bubble ${isMine ? "mine" : "other"}`}>
+                    {m.task_ref_id && (
+                      <div
+                        className="chat-task-chip"
+                        onClick={() => onOpenTask && onOpenTask(m.task_ref_id)}
+                        title="Click to open task"
+                      >
+                        # {m.task_ref_title || `Task #${m.task_ref_id}`}
+                      </div>
+                    )}
+                    <div>{renderBody(m.body, currentUser.id)}</div>
+                  </div>
+                </div>
+              );
             })}
+            <div ref={bottomRef} />
           </div>
-        )}
 
-        <div className="chat-row">
-          <textarea
-            ref={inputRef}
-            className="chat-textarea"
-            placeholder="Write a message… (@ to mention)"
-            value={body}
-            onChange={handleBodyChange}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-            }}
-            rows={1}
-          />
-          <button className="chat-send-btn" onClick={send} disabled={sending || (!body.trim() && !selectedTaskRef)}>
-            <Send size={15} />
-          </button>
+          {error && <div className="chat-error">{error}</div>}
+
+          <div className="chat-input-wrap" style={{ position:"relative" }}>
+            {showTaskPicker && (
+              <div className="chat-picker">
+                <div className="chat-picker-label">Select a task to reference</div>
+                {tasks.slice(0, 20).map((t) => (
+                  <div key={t.id} className="chat-picker-item" onClick={() => addTaskRef(t)}>
+                    <span style={{ width:8, height:8, borderRadius:"50%", background:"#1A7FA8", display:"inline-block" }} />
+                    {t.title}
+                  </div>
+                ))}
+              </div>
+            )}
+            {showMentionPicker && filteredMembers.length > 0 && (
+              <div className="chat-picker">
+                <div className="chat-picker-label">Mention a member</div>
+                {filteredMembers.map((m) => (
+                  <div key={m.id} className="chat-picker-item" onClick={() => addMentionToBody(m)}>
+                    <div className="chat-avatar" style={{ background: m.color }}>{m.initials}</div>
+                    {m.name}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="chat-toolbar">
+              <button
+                className={`chat-tool-btn ${showTaskPicker ? "active" : ""}`}
+                onClick={() => { setShowTaskPicker((v) => !v); setShowMentionPicker(false); }}
+              >
+                <Hash size={13} /> Task
+              </button>
+              <button
+                className={`chat-tool-btn ${showMentionPicker ? "active" : ""}`}
+                onClick={() => { setShowMentionPicker((v) => !v); setShowTaskPicker(false); }}
+              >
+                <AtSign size={13} /> Mention
+              </button>
+            </div>
+
+            {selectedTaskRef && (
+              <div className="chat-ref-chip">
+                # {selectedTaskRef.title}
+                <X size={11} style={{ cursor:"pointer" }} onClick={() => setSelectedTaskRef(null)} />
+              </div>
+            )}
+            {mentionIds.length > 0 && (
+              <div className="chat-mention-chips">
+                {mentionIds.map((uid) => {
+                  const m = members.find((x) => x.id === uid);
+                  return m ? (
+                    <span key={uid} className="chat-mention-chip">
+                      @{m.name.split(" ")[0]}
+                      <X size={10} style={{ cursor:"pointer" }} onClick={() => toggleMention(uid)} />
+                    </span>
+                  ) : null;
+                })}
+              </div>
+            )}
+
+            <div className="chat-row">
+              <textarea
+                ref={inputRef}
+                className="chat-textarea"
+                placeholder="Write a message… (@ to mention)"
+                value={body}
+                onChange={handleBodyChange}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+                }}
+                rows={1}
+              />
+              <button className="chat-send-btn" onClick={send} disabled={sending || (!body.trim() && !selectedTaskRef)}>
+                <Send size={15} />
+              </button>
+            </div>
+          </div>
         </div>
+      )}
+
+      <div className="chat-launcher" onClick={onToggleOpen} title={open ? "Close chat" : "Open project chat"}>
+        {open ? <X size={22} /> : <span style={{ fontSize:24 }}>💬</span>}
+        {!open && unseenCount > 0 && (
+          <span className="chat-launcher-badge">{unseenCount > 9 ? "9+" : unseenCount}</span>
+        )}
       </div>
     </div>
   );

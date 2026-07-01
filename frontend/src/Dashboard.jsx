@@ -23,6 +23,10 @@ import {
   Flag,
   User,
   Tag,
+  Edit2,
+  FileText,
+  Mail,
+  Check,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
@@ -103,6 +107,24 @@ export default function Dashboard({ token, user, onLogout }) {
   const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
   const [popoverComment, setPopoverComment] = useState("");
   const [newTaskFiles, setNewTaskFiles] = useState([]);
+  // Subtask target date/time
+  const [newSubtaskTarget, setNewSubtaskTarget] = useState("");
+  // Pending invites (for the current user)
+  const [pendingInvites, setPendingInvites] = useState([]);
+  const [showInvites, setShowInvites] = useState(false);
+  // Rename project
+  const [showRenameProject, setShowRenameProject] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  // Generate report
+  const [showReport, setShowReport] = useState(false);
+  const [reportData, setReportData] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  // Status-change confirmation
+  const [pendingStatusChange, setPendingStatusChange] = useState(null); // { taskId, status, title }
+  // Chat floating widget
+  const [chatMinimized, setChatMinimized] = useState(false);
+  // Calendar: click-to-create
+  const [calendarNewDate, setCalendarNewDate] = useState(null);
   const newTaskFileRef = useRef(null);
 
   const dragTaskId = useRef(null);
@@ -224,6 +246,66 @@ export default function Dashboard({ token, user, onLogout }) {
       setTaskUnreadCounts(counts.byTask || {});
       setProjectUnreadCounts(counts.byProject || {});
     } catch (_) {}
+  };
+
+  // Load pending project invitations on mount
+  useEffect(() => {
+    api.listPendingInvites(token).then(setPendingInvites).catch(() => {});
+  }, [token]);
+
+  const refreshPendingInvites = async () => {
+    try { setPendingInvites(await api.listPendingInvites(token)); } catch (_) {}
+  };
+
+  const acceptInvite = async (inviteId) => {
+    try {
+      await api.acceptInvite(token, inviteId);
+      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+      const projs = await api.listProjects(token);
+      setProjects(projs);
+    } catch (err) { setError(err.message); }
+  };
+
+  const declineInvite = async (inviteId) => {
+    try {
+      await api.declineInvite(token, inviteId);
+      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+    } catch (err) { setError(err.message); }
+  };
+
+  // Member invite autocomplete now lives inside MembersPanel.jsx directly.
+
+  // Rename project
+  const submitRenameProject = async () => {
+    if (!renameValue.trim() || !activeProject) return;
+    try {
+      const updated = await api.renameProject(token, activeProject.id, renameValue.trim());
+      setProjects((prev) => prev.map((p) => (p.id === activeProject.id ? { ...p, ...updated } : p)));
+      setActiveProject((prev) => ({ ...prev, ...updated }));
+      setShowRenameProject(false);
+    } catch (err) { setError(err.message); }
+  };
+
+  // Generate report
+  const openReport = async () => {
+    if (!activeProject) return;
+    setShowReport(true);
+    setReportLoading(true);
+    try {
+      const data = await api.getProjectReport(token, activeProject.id);
+      setReportData(data);
+    } catch (err) { setError(err.message); }
+    finally { setReportLoading(false); }
+  };
+
+  // Status-change confirmation
+  const requestStatusChange = (taskId, newStatus, taskTitle) => {
+    setPendingStatusChange({ taskId, status: newStatus, title: taskTitle });
+  };
+  const confirmStatusChange = () => {
+    if (!pendingStatusChange) return;
+    patchTask(pendingStatusChange.taskId, { status: pendingStatusChange.status });
+    setPendingStatusChange(null);
   };
 
   // Load archived projects when the drawer is opened
@@ -459,9 +541,11 @@ export default function Dashboard({ token, user, onLogout }) {
   const addSubtask = async () => {
     if (!newSubtask.trim() || !selectedTask) return;
     try {
-      const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim());
+      const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim(), newSubtaskTarget || undefined);
       setSubtasks((prev) => [...prev, s]);
       setNewSubtask("");
+      setNewSubtaskTarget("");
+      refreshTasks(); // so Calendar/Timeline/List/Kanban all see the new subtask immediately
     } catch (err) { setError(err.message); }
   };
 
@@ -471,12 +555,13 @@ export default function Dashboard({ token, user, onLogout }) {
       await api.updateSubtask(token, id, { is_done });
       const h = await api.taskHistory(token, selectedTask.id);
       setHistory(h);
+      refreshTasks();
     } catch (err) { setError(err.message); refreshTasks(); }
   };
 
   const deleteSubtask = async (id) => {
     setSubtasks((prev) => prev.filter((s) => s.id !== id));
-    try { await api.deleteSubtask(token, id); }
+    try { await api.deleteSubtask(token, id); refreshTasks(); }
     catch (err) { setError(err.message); }
   };
 
@@ -923,6 +1008,14 @@ export default function Dashboard({ token, user, onLogout }) {
           <div className="pm-topbar-row1">
             <div className="pm-title pm-serif">
               {activeProject ? activeProject.name : "No project selected"}
+              {activeProject && (
+                <Edit2
+                  size={13}
+                  style={{ marginLeft: 9, cursor: "pointer", color: "var(--muted)", verticalAlign: "middle" }}
+                  title="Rename project"
+                  onClick={() => { setRenameValue(activeProject.name); setShowRenameProject(true); }}
+                />
+              )}
               <span className="ruleline" />
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -943,6 +1036,30 @@ export default function Dashboard({ token, user, onLogout }) {
                   <div key={m.id} className="pm-avatar" style={{ background: m.color }} title={m.name}>{m.initials}</div>
                 ))}
               </div>
+              <div className="pm-bell-btn" style={{ position: "relative" }} title="Project invitations" onClick={() => setShowInvites((v) => !v)}>
+                <Mail size={15} />
+                {pendingInvites.length > 0 && <span className="pm-bell-badge">{pendingInvites.length}</span>}
+                {showInvites && (
+                  <div className="pm-bell-dropdown" onClick={(e) => e.stopPropagation()} style={{ width: 300 }}>
+                    <div className="pm-bell-head"><span className="pm-bell-title">Project Invitations</span></div>
+                    {pendingInvites.length === 0 && <div className="pm-bell-empty">No pending invitations.</div>}
+                    {pendingInvites.map((inv) => (
+                      <div key={inv.id} style={{ padding: "10px 14px", borderBottom: "1px solid #F1EDE2" }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{inv.project_name}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>Invited by {inv.invited_by_name || "a member"}</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="pm-btn-primary" style={{ flex: 1, padding: "5px 0", fontSize: 11.5 }} onClick={() => acceptInvite(inv.id)}>
+                            <Check size={11} /> Accept
+                          </button>
+                          <button className="pm-btn-cancel" style={{ flex: 1, padding: "5px 0", fontSize: 11.5 }} onClick={() => declineInvite(inv.id)}>
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <NotificationBell
                 token={token}
                 notifications={notifications}
@@ -950,6 +1067,11 @@ export default function Dashboard({ token, user, onLogout }) {
                 onMarkRead={markNotificationRead}
                 onMarkAllRead={markAllNotificationsRead}
               />
+              {activeProject && (
+                <button className="pm-btn-ghost" onClick={openReport} title="Generate a full project report">
+                  <FileText size={14} /> Report
+                </button>
+              )}
               <button className="pm-btn-primary" onClick={() => openNewTask("todo")} disabled={!activeProject}>
                 <Plus size={15} /> New Task
               </button>
@@ -1071,7 +1193,14 @@ export default function Dashboard({ token, user, onLogout }) {
                           <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee"><User size={13} /></button>
                           <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment"><Paperclip size={13} /></button>
                           <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment"><MessageSquare size={13} /></button>
+                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "subtask")} title="Add Subtask"><CheckSquare size={13} /></button>
                         </div>
+                        {t.subtasks && t.subtasks.length > 0 && (
+                          <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:6, fontSize:10.5, color:"var(--muted)" }}>
+                            <CheckSquare size={11} />
+                            {t.subtasks.filter((s) => s.is_done).length}/{t.subtasks.length} subtasks
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1092,7 +1221,18 @@ export default function Dashboard({ token, user, onLogout }) {
         ) : activeView === "list" ? (
           <ListView tasks={tasks} onSelect={setSelectedTask} />
         ) : activeView === "calendar" ? (
-          <CalendarView tasks={tasks} onSelect={setSelectedTask} />
+          <CalendarView
+            tasks={tasks}
+            onSelect={(t) => {
+              const full = tasks.find((x) => x.id === t.id) || t;
+              setSelectedTask(full);
+            }}
+            onCreateDate={(dateKey) => {
+              setNewTaskStatus("todo");
+              setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate: dateKey, dueDate: dateKey, category:"simple" });
+              setShowNewTask(true);
+            }}
+          />
         ) : activeView === "timeline" ? (
           <TimelineView tasks={tasks} onSelect={setSelectedTask} />
         ) : (
@@ -1265,22 +1405,23 @@ export default function Dashboard({ token, user, onLogout }) {
             onClick={closeCardPopover}
           >
             <div
-              className={`pm-card-popover${cardPopover.type === "comment" ? " type-comment" : ""}`}
+              className={`pm-card-popover${cardPopover.type === "comment" || cardPopover.type === "subtask" ? " type-comment" : ""}`}
               style={{
                 top: Math.min(cardPopover.y, window.innerHeight - 200),
-                left: Math.min(cardPopover.x, window.innerWidth - (cardPopover.type === "comment" ? 270 : 215)),
+                left: Math.min(cardPopover.x, window.innerWidth - (cardPopover.type === "comment" || cardPopover.type === "subtask" ? 270 : 215)),
               }}
               onClick={(e) => e.stopPropagation()}
             >
               <div style={{ fontWeight:700, fontSize:11.5, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6, paddingBottom:6, borderBottom:"1px solid var(--border)" }}>
                 {cardPopover.type === "status" ? "Change Status" :
                  cardPopover.type === "priority" ? "Change Priority" :
-                 cardPopover.type === "assignee" ? "Change Assignee" : "Write Comment"}
+                 cardPopover.type === "assignee" ? "Change Assignee" :
+                 cardPopover.type === "subtask" ? "Add Subtask" : "Write Comment"}
               </div>
 
               {cardPopover.type === "status" && COLUMNS.map((c) => (
                 <div key={c.id} className={`pm-pop-option ${t.status===c.id?"active":""}`}
-                  onClick={() => cardPopoverPatch(t.id, { status: c.id })}>
+                  onClick={() => { closeCardPopover(); requestStatusChange(t.id, c.id, t.title); }}>
                   <span style={{ width:9, height:9, borderRadius:"50%", background:c.accent, display:"inline-block", flexShrink:0 }} />
                   {c.label} {t.status===c.id && "✓"}
                 </div>
@@ -1334,10 +1475,179 @@ export default function Dashboard({ token, user, onLogout }) {
                   </button>
                 </>
               )}
+
+              {cardPopover.type === "subtask" && (
+                <>
+                  <input
+                    autoFocus
+                    placeholder="Subtask title…"
+                    value={newSubtask}
+                    onChange={(e) => setNewSubtask(e.target.value)}
+                    style={{ width:"100%", border:"1px solid var(--border)", borderRadius:8, padding:"7px 9px", fontSize:12.5, outline:"none", marginBottom:7, fontFamily:"'Inter',sans-serif" }}
+                  />
+                  <input
+                    type="datetime-local"
+                    value={newSubtaskTarget}
+                    onChange={(e) => setNewSubtaskTarget(e.target.value)}
+                    style={{ width:"100%", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 9px", fontSize:11.5, outline:"none", marginBottom:7 }}
+                    title="Target completion date/time (optional)"
+                  />
+                  <button
+                    className="pm-btn-primary"
+                    style={{ width:"100%", padding:"8px 0", fontSize:13 }}
+                    onClick={async () => {
+                      if (!newSubtask.trim()) return;
+                      try {
+                        await api.createSubtask(token, t.id, newSubtask.trim(), newSubtaskTarget || undefined);
+                        setNewSubtask(""); setNewSubtaskTarget("");
+                        refreshTasks();
+                      } catch (err) { setError(err.message); }
+                      closeCardPopover();
+                    }}
+                  >
+                    Add Subtask
+                  </button>
+                </>
+              )}
             </div>
           </div>
         );
       })()}
+
+      {/* ── Status Change Confirmation ── */}
+      {pendingStatusChange && (
+        <div className="pm-modal-overlay" onClick={() => setPendingStatusChange(null)}>
+          <div className="pm-modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-body" style={{ paddingTop: 24, textAlign: "center" }}>
+              <div style={{ width:48, height:48, borderRadius:"50%", background:"#DBEAFE", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px" }}>
+                <RotateCw size={22} color="#1D4ED8" />
+              </div>
+              <div style={{ fontSize:15, fontWeight:700, color:"var(--teal-deep)", marginBottom:6 }}>Update task status?</div>
+              <div style={{ fontSize:13, color:"var(--muted)", marginBottom:20, lineHeight:1.5 }}>
+                Move "<strong>{pendingStatusChange.title}</strong>" to <strong>{STATUS_LABELS[pendingStatusChange.status]}</strong>?
+              </div>
+              <div className="pm-modal-footer" style={{ justifyContent:"center" }}>
+                <button className="pm-btn-cancel" onClick={() => setPendingStatusChange(null)}>Cancel</button>
+                <button className="pm-btn-primary" onClick={confirmStatusChange}>Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rename Project Modal ── */}
+      {showRenameProject && activeProject && (
+        <div className="pm-modal-overlay" onClick={() => setShowRenameProject(false)}>
+          <div className="pm-modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">Rename Project</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowRenameProject(false)} />
+            </div>
+            <div className="pm-modal-body">
+              <div className="pm-field-row">
+                <label>Project Name</label>
+                <input
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitRenameProject()}
+                />
+              </div>
+              <div className="pm-modal-footer">
+                <button className="pm-btn-cancel" onClick={() => setShowRenameProject(false)}>Cancel</button>
+                <button className="pm-btn-primary" onClick={submitRenameProject} disabled={!renameValue.trim()}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Project Report Modal ── */}
+      {showReport && (
+        <div className="pm-modal-overlay" onClick={() => setShowReport(false)}>
+          <div className="pm-modal" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">Project Report</div>
+              <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                {reportData && (
+                  <button className="pm-btn-ghost" style={{ padding:"6px 12px" }} onClick={() => window.print()}>
+                    Print / Save as PDF
+                  </button>
+                )}
+                <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowReport(false)} />
+              </div>
+            </div>
+            <div className="pm-modal-body" id="pm-report-printable">
+              {reportLoading && <div style={{ textAlign:"center", padding:40, color:"var(--muted)" }}>Generating report…</div>}
+              {reportData && (
+                <>
+                  <style>{`
+                    @media print {
+                      body * { visibility: hidden; }
+                      #pm-report-printable, #pm-report-printable * { visibility: visible; }
+                      #pm-report-printable { position: absolute; left: 0; top: 0; width: 100%; }
+                    }
+                  `}</style>
+                  <h2 style={{ fontFamily:"'Merriweather',serif", fontSize:22, color:"var(--teal-deep)", marginBottom:2 }}>{reportData.project.name}</h2>
+                  <div style={{ fontSize:11.5, color:"var(--muted)", marginBottom:18 }}>
+                    Generated {new Date(reportData.generatedAt).toLocaleString()} · Created {new Date(reportData.project.created_at).toLocaleDateString()}
+                  </div>
+
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:10, marginBottom:22 }}>
+                    {[
+                      ["Total Tasks", reportData.summary.totalTasks],
+                      ["Overdue", reportData.summary.overdueCount],
+                      ["Members", reportData.summary.memberCount],
+                      ["Comments", reportData.summary.commentCount],
+                    ].map(([label, val]) => (
+                      <div key={label} style={{ background:"var(--paper-deep)", borderRadius:10, padding:"12px 14px", textAlign:"center" }}>
+                        <div style={{ fontSize:22, fontWeight:800, color:"var(--teal-deep)" }}>{val}</div>
+                        <div style={{ fontSize:10.5, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.04em", marginTop:2 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <h3 style={{ fontSize:13.5, fontWeight:700, marginBottom:8, color:"var(--teal-deep)" }}>Status Breakdown</h3>
+                  <div style={{ display:"flex", gap:8, marginBottom:18, flexWrap:"wrap" }}>
+                    {Object.entries(reportData.summary.byStatus).map(([s, n]) => (
+                      <span key={s} style={{ background:STATUS_COLORS[s] || "#999", color:"#fff", borderRadius:999, padding:"4px 12px", fontSize:12, fontWeight:700 }}>
+                        {STATUS_LABELS[s] || s}: {n}
+                      </span>
+                    ))}
+                  </div>
+
+                  <h3 style={{ fontSize:13.5, fontWeight:700, marginBottom:8, color:"var(--teal-deep)" }}>Workload by Assignee</h3>
+                  <div style={{ marginBottom:18 }}>
+                    {Object.entries(reportData.summary.byAssignee).map(([name, n]) => (
+                      <div key={name} style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, padding:"5px 0", borderBottom:"1px solid var(--border)" }}>
+                        <span>{name}</span><span style={{ fontWeight:700 }}>{n} task{n!==1?"s":""}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <h3 style={{ fontSize:13.5, fontWeight:700, marginBottom:8, color:"var(--teal-deep)" }}>Team & Members</h3>
+                  <div style={{ fontSize:12.5, marginBottom:18 }}>
+                    {reportData.members.map((m) => (
+                      <div key={m.id} style={{ padding:"4px 0" }}>{m.name} — <span style={{ color:"var(--muted)" }}>{m.role}</span></div>
+                    ))}
+                  </div>
+
+                  <h3 style={{ fontSize:13.5, fontWeight:700, marginBottom:8, color:"var(--teal-deep)" }}>Recent Activity</h3>
+                  <div style={{ fontSize:12, maxHeight:240, overflowY:"auto" }}>
+                    {reportData.recentActivity.map((a, i) => (
+                      <div key={i} style={{ padding:"6px 0", borderBottom:"1px solid #F1EDE2" }}>
+                        <strong>{a.task_title}</strong> — {a.detail}
+                        <div style={{ color:"var(--muted)", fontSize:10.5 }}>{a.actor_name || "System"} · {new Date(a.created_at).toLocaleString()}</div>
+                      </div>
+                    ))}
+                    {reportData.recentActivity.length === 0 && <div style={{ color:"var(--muted)" }}>No activity recorded yet.</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showArchived && (
         <div className="pm-overlay" onClick={() => setShowArchived(false)}>
@@ -1431,22 +1741,39 @@ export default function Dashboard({ token, user, onLogout }) {
                   <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} onClick={() => toggleSubtask(s.id, !s.is_done)}>
                     {s.is_done ? <CheckSquare size={16} /> : <Square size={16} />}
                   </span>
-                  <span className={`pm-subtask-title ${s.is_done ? "done" : ""}`}>{s.title}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div className={`pm-subtask-title ${s.is_done ? "done" : ""}`}>{s.title}</div>
+                    {s.target_at && (
+                      <div style={{ fontSize:10.5, color: s.is_done ? "var(--muted)" : "#7C3AED", fontWeight:600 }}>
+                        🎯 {new Date(s.target_at).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                      </div>
+                    )}
+                  </div>
                   <X size={13} className="pm-subtask-del" onClick={() => deleteSubtask(s.id)} />
                 </div>
               ))}
-              <div className="pm-subtask-add">
+              <div className="pm-subtask-add" style={{ flexDirection:"column", alignItems:"stretch", gap:6 }}>
                 <input
                   placeholder="Add a subtask…"
                   value={newSubtask}
                   onChange={(e) => setNewSubtask(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addSubtask()}
                 />
+                <div style={{ display:"flex", gap:6 }}>
+                  <input
+                    type="datetime-local"
+                    value={newSubtaskTarget}
+                    onChange={(e) => setNewSubtaskTarget(e.target.value)}
+                    style={{ flex:1, border:"1px dashed var(--border)", borderRadius:7, padding:"5px 8px", fontSize:11.5, outline:"none" }}
+                    title="Target completion date/time (optional)"
+                  />
+                  <button className="pm-btn-primary" style={{ padding:"5px 12px", fontSize:11.5 }} onClick={addSubtask}>Add</button>
+                </div>
               </div>
             </div>
 
             <div className="pm-field-label">Status</div>
-            <select className="pm-select" value={selectedTask.status} onChange={(e) => patchTask(selectedTask.id, { status: e.target.value })}>
+            <select className="pm-select" value={selectedTask.status} onChange={(e) => requestStatusChange(selectedTask.id, e.target.value, selectedTask.title)}>
               {COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
 
@@ -1576,8 +1903,8 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── Chat Panel ── */}
-      {showChat && activeProject && (
+      {/* ── Floating Chat Widget (always rendered as a launcher bubble; expands when open) ── */}
+      {activeProject && (
         <ChatPanel
           token={token}
           project={activeProject}
@@ -1585,7 +1912,8 @@ export default function Dashboard({ token, user, onLogout }) {
           members={members}
           tasks={tasks}
           messages={chatMessages}
-          onClose={() => { setShowChat(false); setChatMessages([]); }}
+          open={showChat}
+          onToggleOpen={() => setShowChat((v) => !v)}
           onOpenTask={(taskId) => {
             const t = tasks.find((x) => x.id === taskId);
             if (t) { setSelectedTask(t); setShowChat(false); }
