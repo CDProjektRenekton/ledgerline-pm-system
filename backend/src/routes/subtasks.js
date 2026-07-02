@@ -42,7 +42,7 @@ router.post("/", async (req, res) => {
 // PATCH /api/subtasks/:id  { title?, is_done?, targetAt? }
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
-  const { title, is_done, targetAt } = req.body;
+  const { title, is_done, targetAt, position } = req.body;
 
   const existing = await db.query("SELECT * FROM subtasks WHERE id = $1", [id]);
   if (existing.rows.length === 0) return res.status(404).json({ error: "Subtask not found" });
@@ -52,20 +52,26 @@ router.patch("/:id", async (req, res) => {
     `UPDATE subtasks SET
        title = COALESCE($1, title),
        is_done = COALESCE($2, is_done),
-       target_at = CASE WHEN $4 THEN $3 ELSE target_at END
-     WHERE id = $5 RETURNING *`,
-    [title !== undefined ? title.trim() : null, is_done !== undefined ? is_done : null, targetAt || null, "targetAt" in req.body, id]
+       target_at = CASE WHEN $4 THEN $3 ELSE target_at END,
+       position = COALESCE($5, position)
+     WHERE id = $6 RETURNING *`,
+    [title !== undefined ? title.trim() : null, is_done !== undefined ? is_done : null, targetAt || null, "targetAt" in req.body, position !== undefined ? position : null, id]
   );
 
   const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [sub.task_id]);
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:updated", result.rows[0]);
     if (is_done !== undefined && is_done !== sub.is_done) {
+      const dt = result.rows[0].target_at
+        ? new Date(result.rows[0].target_at).toLocaleString()
+        : new Date().toLocaleString();
       await logHistory(
         sub.task_id,
         req.user.id,
         "subtask_toggled",
-        `Subtask "${result.rows[0].title}" marked ${is_done ? "done" : "not done"}`
+        is_done
+          ? `Subtask "${result.rows[0].title}" completed at ${dt}`
+          : `Subtask "${result.rows[0].title}" marked not done`
       );
     }
   }

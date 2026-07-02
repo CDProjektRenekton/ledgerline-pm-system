@@ -103,6 +103,8 @@ export default function Dashboard({ token, user, onLogout }) {
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTaskStatus, setNewTaskStatus] = useState("todo");
   const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
+  const [newTaskSubtasks, setNewTaskSubtasks] = useState([]); // { title, targetAt }
+  const [newTaskSubInput, setNewTaskSubInput] = useState("");
   // Card quick-action popover
   const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
   const [popoverComment, setPopoverComment] = useState("");
@@ -174,16 +176,29 @@ export default function Dashboard({ token, user, onLogout }) {
       });
     });
     socket.on("subtask:created", (s) => {
-      setSelectedTask((cur) => {
-        if (cur && cur.id === s.task_id) setSubtasks((prev) => prev.some((x) => x.id === s.id) ? prev : [...prev, s]);
-        return cur;
+      // Update panel subtask list only if this task is currently open
+      setSubtasks((prev) => {
+        if (!prev.find((x) => x.task_id === s.task_id)) return prev; // panel shows different task
+        return prev.some((x) => x.id === s.id) ? prev : [...prev, s];
       });
+      // Always update the bundled subtasks on the task card for cross-view plotting
+      setTasks((prev) => prev.map((t) =>
+        t.id === s.task_id
+          ? { ...t, subtasks: (t.subtasks || []).some((x) => x.id === s.id) ? t.subtasks : [...(t.subtasks || []), s] }
+          : t
+      ));
     });
     socket.on("subtask:updated", (s) => {
       setSubtasks((prev) => prev.map((x) => (x.id === s.id ? s : x)));
+      setTasks((prev) => prev.map((t) =>
+        t.id === s.task_id ? { ...t, subtasks: (t.subtasks || []).map((x) => x.id === s.id ? s : x) } : t
+      ));
     });
-    socket.on("subtask:deleted", ({ id }) => {
+    socket.on("subtask:deleted", ({ id, task_id }) => {
       setSubtasks((prev) => prev.filter((x) => x.id !== id));
+      setTasks((prev) => prev.map((t) =>
+        t.id === task_id ? { ...t, subtasks: (t.subtasks || []).filter((x) => x.id !== id) } : t
+      ));
     });
     socket.on("notification:new", (n) => {
       setNotifications((prev) => [n, ...prev].slice(0, 50));
@@ -195,6 +210,22 @@ export default function Dashboard({ token, user, onLogout }) {
     });
     socket.on("message:created", (msg) => {
       setChatMessages((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]);
+    });
+    // Invite received in real-time — show the badge and update the list immediately
+    socket.on("invite:received", (invite) => {
+      setPendingInvites((prev) => prev.some((i) => i.id === invite.id) ? prev : [
+        {
+          id: invite.id,
+          project_id: invite.project_id,
+          role: invite.role,
+          project_name: "(loading…)",
+          invited_by_name: null,
+          created_at: invite.created_at,
+        },
+        ...prev,
+      ]);
+      // Fetch full details in background
+      api.listPendingInvites(token).then(setPendingInvites).catch(() => {});
     });
 
     return () => socket.disconnect();
@@ -542,27 +573,89 @@ export default function Dashboard({ token, user, onLogout }) {
     if (!newSubtask.trim() || !selectedTask) return;
     try {
       const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim(), newSubtaskTarget || undefined);
-      setSubtasks((prev) => [...prev, s]);
       setNewSubtask("");
       setNewSubtaskTarget("");
-      refreshTasks(); // so Calendar/Timeline/List/Kanban all see the new subtask immediately
+      // Update the panel subtask list directly (don't rely on refreshTasks which
+      // would re-fetch and cause a duplicate alongside the socket event).
+      setSubtasks((prev) => prev.some((x) => x.id === s.id) ? prev : [...prev, s]);
+      // Also update the bundled subtasks on the task card for cross-view plotting
+      // without doing a full refreshTasks() which is what caused the duplication.
+      setTasks((prev) => prev.map((t) =>
+        t.id === s.task_id
+          ? { ...t, subtasks: (t.subtasks || []).some((x) => x.id === s.id) ? t.subtasks : [...(t.subtasks || []), s] }
+          : t
+      ));
     } catch (err) { setError(err.message); }
   };
 
   const toggleSubtask = async (id, is_done) => {
-    setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done } : s)));
-    try {
-      await api.updateSubtask(token, id, { is_done });
-      const h = await api.taskHistory(token, selectedTask.id);
-      setHistory(h);
-      refreshTasks();
-    } catch (err) { setError(err.message); refreshTasks(); }
+    if (is_done) {
+      // Ask for completion date/time, defaulting to now
+      const defaultDt = new Date().toISOString().slice(0, 16);
+      const dtInput = window.prompt(
+        "When did you complete this subtask?\n(Format: YYYY-MM-DDTHH:MM or leave as-is for now)",
+        defaultDt
+      );
+      if (dtInput === null) return; // user cancelled
+      const completedAt = dtInput.trim() || defaultDt;
+      setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: true } : s)));
+      try {
+        const updated = await api.updateSubtask(token, id, { is_done: true, targetAt: completedAt });
+        // Refresh history to show the completion entry
+        const h = await api.taskHistory(token, selectedTask.id);
+        setHistory(h);
+        setTasks((prev) => prev.map((t) =>
+          t.id === updated.task_id
+            ? { ...t, subtasks: (t.subtasks || []).map((s) => s.id === id ? updated : s) }
+            : t
+        ));
+      } catch (err) { setError(err.message); setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: false } : s))); }
+    } else {
+      setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: false } : s)));
+      try {
+        const updated = await api.updateSubtask(token, id, { is_done: false });
+        const h = await api.taskHistory(token, selectedTask.id);
+        setHistory(h);
+        setTasks((prev) => prev.map((t) =>
+          t.id === updated.task_id
+            ? { ...t, subtasks: (t.subtasks || []).map((s) => s.id === id ? updated : s) }
+            : t
+        ));
+      } catch (err) { setError(err.message); setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: true } : s))); }
+    }
   };
 
   const deleteSubtask = async (id) => {
+    const sub = subtasks.find((s) => s.id === id);
     setSubtasks((prev) => prev.filter((s) => s.id !== id));
-    try { await api.deleteSubtask(token, id); refreshTasks(); }
-    catch (err) { setError(err.message); }
+    if (sub) {
+      setTasks((prev) => prev.map((t) =>
+        t.id === sub.task_id ? { ...t, subtasks: (t.subtasks || []).filter((s) => s.id !== id) } : t
+      ));
+    }
+    try { await api.deleteSubtask(token, id); }
+    catch (err) { setError(err.message); refreshTasks(); }
+  };
+
+  const dragSubtaskRef = useRef(null);
+
+  const handleSubtaskDragStart = (id) => { dragSubtaskRef.current = id; };
+  const handleSubtaskDrop = async (targetId) => {
+    if (!dragSubtaskRef.current || dragSubtaskRef.current === targetId) return;
+    const draggedId = dragSubtaskRef.current;
+    dragSubtaskRef.current = null;
+    setSubtasks((prev) => {
+      const from = prev.findIndex((s) => s.id === draggedId);
+      const to   = prev.findIndex((s) => s.id === targetId);
+      if (from === -1 || to === -1) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      next.forEach((s, i) => {
+        if (s.position !== i) api.updateSubtask(token, s.id, { position: i }).catch(() => {});
+      });
+      return next.map((s, i) => ({ ...s, position: i }));
+    });
   };
 
   const archiveProject = async (id, is_archived) => {
@@ -651,6 +744,8 @@ export default function Dashboard({ token, user, onLogout }) {
   const openNewTask = (status = "todo") => {
     setNewTaskStatus(status);
     setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
+    setNewTaskSubtasks([]);
+    setNewTaskSubInput("");
     setShowNewTask(true);
   };
 
@@ -669,12 +764,18 @@ export default function Dashboard({ token, user, onLogout }) {
         dueDate: newTaskForm.dueDate || undefined,
       };
       const created = await api.createTask(token, payload);
+      // Upload any subtasks added in the modal
+      for (const sub of newTaskSubtasks) {
+        try { await api.createSubtask(token, created.id, sub.title, sub.targetAt || undefined); }
+        catch (e) { console.error("Subtask creation failed:", e.message); }
+      }
       // Upload any files that were attached in the modal
       for (const file of newTaskFiles) {
         try { await api.uploadAttachment(token, created.id, file); }
         catch (e) { console.error("File upload failed:", e.message); }
       }
       setNewTaskFiles([]);
+      setNewTaskSubtasks([]);
       setShowNewTask(false);
       refreshTasks();
     } catch (err) {
@@ -744,7 +845,7 @@ export default function Dashboard({ token, user, onLogout }) {
   const visibleActivity = showAllActivity ? activityFeed : activityFeed.slice(-ACTIVITY_PREVIEW);
 
   return (
-    <div className="pm-root">
+    <div className="pm-root" onClick={() => { setShowInvites(false); }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Merriweather:wght@700&display=swap');
 
@@ -983,7 +1084,7 @@ export default function Dashboard({ token, user, onLogout }) {
         <div className="pm-sidebar-resize" onMouseDown={startSidebarResize} />
       </aside>
 
-      {/* Sidebar collapse/expand toggle */}
+      {/* Sidebar collapse-expand toggle */}
       <div
         className={`pm-sidebar-toggle${sidebarCollapsed ? " collapsed" : ""}`}
         style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
@@ -1036,22 +1137,59 @@ export default function Dashboard({ token, user, onLogout }) {
                   <div key={m.id} className="pm-avatar" style={{ background: m.color }} title={m.name}>{m.initials}</div>
                 ))}
               </div>
-              <div className="pm-bell-btn" style={{ position: "relative" }} title="Project invitations" onClick={() => setShowInvites((v) => !v)}>
-                <Mail size={15} />
-                {pendingInvites.length > 0 && <span className="pm-bell-badge">{pendingInvites.length}</span>}
+              <div style={{ position: "relative" }} title="Project invitations">
+                <div
+                  className="pm-bell-btn"
+                  onClick={() => setShowInvites((v) => !v)}
+                  style={{ position:"relative" }}
+                >
+                  <Mail size={15} />
+                  {pendingInvites.length > 0 && (
+                    <span className="pm-bell-badge" style={{ background:"#EF4444" }}>{pendingInvites.length}</span>
+                  )}
+                </div>
                 {showInvites && (
-                  <div className="pm-bell-dropdown" onClick={(e) => e.stopPropagation()} style={{ width: 300 }}>
-                    <div className="pm-bell-head"><span className="pm-bell-title">Project Invitations</span></div>
-                    {pendingInvites.length === 0 && <div className="pm-bell-empty">No pending invitations.</div>}
+                  <div
+                    className="pm-bell-dropdown"
+                    style={{ width: 320, right: 0, top: 40 }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="pm-bell-head" style={{ padding:"12px 16px 10px" }}>
+                      <span className="pm-bell-title">Project Invitations</span>
+                      {pendingInvites.length > 0 && (
+                        <span style={{ fontSize:11, background:"#EF4444", color:"#fff", borderRadius:999, padding:"2px 8px", fontWeight:700 }}>
+                          {pendingInvites.length} pending
+                        </span>
+                      )}
+                    </div>
+                    {pendingInvites.length === 0 && (
+                      <div className="pm-bell-empty">No pending invitations.</div>
+                    )}
                     {pendingInvites.map((inv) => (
-                      <div key={inv.id} style={{ padding: "10px 14px", borderBottom: "1px solid #F1EDE2" }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{inv.project_name}</div>
-                        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>Invited by {inv.invited_by_name || "a member"}</div>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="pm-btn-primary" style={{ flex: 1, padding: "5px 0", fontSize: 11.5 }} onClick={() => acceptInvite(inv.id)}>
-                            <Check size={11} /> Accept
+                      <div key={inv.id} style={{ padding:"14px 16px", borderBottom:"1px solid var(--border)", background:"#F8FCFF" }}>
+                        <div style={{ display:"flex", alignItems:"flex-start", gap:10, marginBottom:10 }}>
+                          <div style={{ width:36, height:36, borderRadius:8, background:"linear-gradient(135deg,#1A7FA8,#0B4F6C)", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:16, flexShrink:0 }}>📁</div>
+                          <div>
+                            <div style={{ fontSize:13.5, fontWeight:700, color:"var(--teal-deep)", lineHeight:1.2 }}>{inv.project_name}</div>
+                            <div style={{ fontSize:11.5, color:"var(--muted)", marginTop:2 }}>
+                              Invited by <strong>{inv.invited_by_name || "a member"}</strong>
+                            </div>
+                            <div style={{ fontSize:10.5, color:"#B0C8D8", marginTop:1 }}>
+                              Role: {inv.role} · {new Date(inv.created_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ display:"flex", gap:8 }}>
+                          <button
+                            onClick={() => { acceptInvite(inv.id); setShowInvites(false); }}
+                            style={{ flex:1, padding:"9px 0", background:"linear-gradient(135deg,#1A7FA8,#0B4F6C)", color:"#fff", border:"none", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}
+                          >
+                            <Check size={14} /> Accept
                           </button>
-                          <button className="pm-btn-cancel" style={{ flex: 1, padding: "5px 0", fontSize: 11.5 }} onClick={() => declineInvite(inv.id)}>
+                          <button
+                            onClick={() => declineInvite(inv.id)}
+                            style={{ flex:1, padding:"9px 0", background:"#F1F5F9", color:"#64748B", border:"1.5px solid #CBD5E1", borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer" }}
+                          >
                             Decline
                           </button>
                         </div>
@@ -1195,10 +1333,29 @@ export default function Dashboard({ token, user, onLogout }) {
                           <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment"><MessageSquare size={13} /></button>
                           <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "subtask")} title="Add Subtask"><CheckSquare size={13} /></button>
                         </div>
+                        {/* Subtask mini-list with checkboxes */}
                         {t.subtasks && t.subtasks.length > 0 && (
-                          <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:6, fontSize:10.5, color:"var(--muted)" }}>
-                            <CheckSquare size={11} />
-                            {t.subtasks.filter((s) => s.is_done).length}/{t.subtasks.length} subtasks
+                          <div style={{ margin:"6px 0 4px", borderTop:"1px solid var(--border)", paddingTop:5 }}>
+                            {t.subtasks.slice(0, 4).map((s) => (
+                              <div
+                                key={s.id}
+                                style={{ display:"flex", alignItems:"center", gap:6, padding:"2px 0", cursor:"pointer" }}
+                                onClick={(e) => { e.stopPropagation(); setSelectedTask(t); }}
+                              >
+                                <span
+                                  style={{ color: s.is_done ? "var(--teal)" : "var(--muted)", flexShrink:0, display:"flex" }}
+                                  onClick={(e) => { e.stopPropagation(); toggleSubtask(s.id, !s.is_done); }}
+                                >
+                                  {s.is_done ? <CheckSquare size={12} /> : <Square size={12} />}
+                                </span>
+                                <span style={{ fontSize:11, color: s.is_done ? "var(--muted)" : "var(--ink)", textDecoration: s.is_done ? "line-through" : "none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                  {s.title}
+                                </span>
+                              </div>
+                            ))}
+                            {t.subtasks.length > 4 && (
+                              <div style={{ fontSize:10, color:"var(--muted)", paddingLeft:18 }}>+{t.subtasks.length - 4} more</div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1242,7 +1399,7 @@ export default function Dashboard({ token, user, onLogout }) {
         )}
       </div>
 
-      {/* ── New Project Modal ── */}
+      {/* -- New Project Modal -- */}
       {showNewProject && (
         <div className="pm-modal-overlay" onClick={() => setShowNewProject(false)}>
           <div className="pm-modal" onClick={(e) => e.stopPropagation()}>
@@ -1281,7 +1438,7 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── New Task Modal ── */}
+      {/* -- New Task Modal -- */}
       {showNewTask && (
         <div className="pm-modal-overlay" onClick={() => setShowNewTask(false)}>
           <div className="pm-modal" onClick={(e) => e.stopPropagation()}>
@@ -1358,6 +1515,45 @@ export default function Dashboard({ token, user, onLogout }) {
                 </select>
               </div>
               <div className="pm-field-row">
+                <label>Subtasks</label>
+                <div>
+                  {newTaskSubtasks.map((s, idx) => (
+                    <div key={idx} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:5, background:"var(--paper-deep)", borderRadius:7, padding:"5px 8px" }}>
+                      <Square size={12} style={{ color:"var(--muted)", flexShrink:0 }} />
+                      <span style={{ flex:1, fontSize:12.5 }}>{s.title}</span>
+                      <X size={12} style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }} onClick={() => setNewTaskSubtasks((prev) => prev.filter((_, k) => k !== idx))} />
+                    </div>
+                  ))}
+                  <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                    <input
+                      placeholder="Add a subtask and press Enter..."
+                      value={newTaskSubInput}
+                      onChange={(e) => setNewTaskSubInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newTaskSubInput.trim()) {
+                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: "" }]);
+                          setNewTaskSubInput("");
+                        }
+                      }}
+                      style={{ flex:1, border:"1.5px dashed var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit" }}
+                    />
+                    <button
+                      type="button"
+                      className="pm-btn-ghost"
+                      style={{ padding:"7px 11px", fontSize:12.5 }}
+                      onClick={() => {
+                        if (newTaskSubInput.trim()) {
+                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: "" }]);
+                          setNewTaskSubInput("");
+                        }
+                      }}
+                    >
+                      + Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="pm-field-row">
                 <label>Attach Files</label>
                 <input
                   ref={newTaskFileRef}
@@ -1375,12 +1571,15 @@ export default function Dashboard({ token, user, onLogout }) {
                 </div>
                 {newTaskFiles.length > 0 && (
                   <div style={{ marginTop:6, display:"flex", flexWrap:"wrap", gap:5 }}>
-                    {newTaskFiles.map((f, i) => (
+                    {newTaskFiles.map((f, i) => {
+                      const fi = i;
+                      return (
                       <span key={i} style={{ fontSize:11, background:"var(--paper-deep)", border:"1px solid var(--border)", borderRadius:5, padding:"2px 8px", display:"flex", alignItems:"center", gap:4 }}>
                         {f.name}
-                        <X size={10} style={{ cursor:"pointer" }} onClick={() => setNewTaskFiles((prev) => prev.filter((_, j) => j !== i))} />
+                        <X size={10} style={{ cursor:"pointer" }} onClick={() => setNewTaskFiles((prev) => prev.filter((_, j) => j !== fi))} />
                       </span>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1395,7 +1594,7 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── Card Quick-Action Popover ── */}
+      {/* -- Card Quick-Action Popover -- */}
       {cardPopover && (() => {
         const t = tasks.find((x) => x.id === cardPopover.taskId);
         if (!t) return null;
@@ -1514,7 +1713,7 @@ export default function Dashboard({ token, user, onLogout }) {
         );
       })()}
 
-      {/* ── Status Change Confirmation ── */}
+      {/* -- Status Change Confirmation -- */}
       {pendingStatusChange && (
         <div className="pm-modal-overlay" onClick={() => setPendingStatusChange(null)}>
           <div className="pm-modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
@@ -1535,7 +1734,7 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── Rename Project Modal ── */}
+      {/* -- Rename Project Modal -- */}
       {showRenameProject && activeProject && (
         <div className="pm-modal-overlay" onClick={() => setShowRenameProject(false)}>
           <div className="pm-modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
@@ -1562,7 +1761,7 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── Project Report Modal ── */}
+      {/* -- Project Report Modal -- */}
       {showReport && (
         <div className="pm-modal-overlay" onClick={() => setShowReport(false)}>
           <div className="pm-modal" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
@@ -1571,7 +1770,7 @@ export default function Dashboard({ token, user, onLogout }) {
               <div style={{ display:"flex", gap:10, alignItems:"center" }}>
                 {reportData && (
                   <button className="pm-btn-ghost" style={{ padding:"6px 12px" }} onClick={() => window.print()}>
-                    Print / Save as PDF
+                    {"Print / Save as PDF"}
                   </button>
                 )}
                 <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowReport(false)} />
@@ -1737,7 +1936,16 @@ export default function Dashboard({ token, user, onLogout }) {
             <div className="pm-field-label">Subtasks ({subtasks.filter((s) => s.is_done).length}/{subtasks.length})</div>
             <div className="pm-subtasks-wrap">
               {subtasks.map((s) => (
-                <div className="pm-subtask-row" key={s.id}>
+                <div
+                  className="pm-subtask-row"
+                  key={s.id}
+                  draggable
+                  onDragStart={() => handleSubtaskDragStart(s.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleSubtaskDrop(s.id)}
+                  style={{ cursor:"grab" }}
+                >
+                  <span style={{ color:"var(--muted)", fontSize:10, marginRight:2, cursor:"grab" }}>⠿</span>
                   <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} onClick={() => toggleSubtask(s.id, !s.is_done)}>
                     {s.is_done ? <CheckSquare size={16} /> : <Square size={16} />}
                   </span>
@@ -1903,7 +2111,7 @@ export default function Dashboard({ token, user, onLogout }) {
         </div>
       )}
 
-      {/* ── Floating Chat Widget (always rendered as a launcher bubble; expands when open) ── */}
+      {/* -- Floating Chat Widget (always rendered as a launcher bubble; expands when open) -- */}
       {activeProject && (
         <ChatPanel
           token={token}

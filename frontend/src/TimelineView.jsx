@@ -76,9 +76,11 @@ export default function TimelineView({ tasks, onSelect }) {
           const span   = Math.max(dayDiff(start, due) + 1, 1);
           const assigneeLabel = t.assignee_name ? t.assignee_name.split(" ")[0] : t.team_name || "";
           const subMarkers = (t.subtasks || []).filter((s) => s.target_at);
+          // Row height: base 48px + 22px per subtask marker so labels don't overflow
+          const rowH = Math.max(48, 36 + subMarkers.length * 22 + 8);
           return (
             <React.Fragment key={t.id}>
-              <div className="pm-tl-rowlabel" onClick={() => onSelect(t)}>
+              <div className="pm-tl-rowlabel" style={{ minHeight: rowH }} onClick={() => onSelect(t)}>
                 <div style={{ fontWeight:600, fontSize:12.5, lineHeight:1.3 }}>{t.title}</div>
                 {assigneeLabel && (
                   <div style={{ display:"inline-flex", alignItems:"center", gap:4, marginTop:3, background:"#DBEAFE", color:"#1D4ED8", borderRadius:999, padding:"2px 8px", fontSize:10.5, fontWeight:700 }}>
@@ -86,7 +88,7 @@ export default function TimelineView({ tasks, onSelect }) {
                   </div>
                 )}
               </div>
-              <div className="pm-tl-track" style={{ gridColumn:`2 / span ${totalDays}`, gridTemplateColumns:`repeat(${totalDays}, 36px)` }}>
+              <div className="pm-tl-track" style={{ gridColumn:`2 / span ${totalDays}`, gridTemplateColumns:`repeat(${totalDays}, 36px)`, minHeight: rowH }}>
                 {days.map((d, i) => (
                   <div key={i} className={`pm-tl-cell ${d.toDateString() === todayKey ? "today" : ""}`} />
                 ))}
@@ -96,18 +98,34 @@ export default function TimelineView({ tasks, onSelect }) {
                   onClick={() => onSelect(t)}
                   title={`${t.title}${assigneeLabel ? ` · ${assigneeLabel}` : ""}`}
                 />
-                {subMarkers.map((s) => {
+                {subMarkers.map((s, si) => {
                   const sDate = new Date(s.target_at);
                   const sOffset = dayDiff(rangeStart, sDate);
                   if (sOffset < 0 || sOffset >= totalDays) return null;
+                  const leftPx = sOffset * 36 + 14;
+                  const topPx = 31 + si * 22; // stack vertically — each marker 22px below previous
                   return (
-                    <div
-                      key={s.id}
-                      className="pm-tl-submarker"
-                      style={{ left: sOffset * 36 + 14, background: s.is_done ? "#A78BFA" : SUBTASK_COLOR, opacity: s.is_done ? 0.55 : 1 }}
-                      title={`Subtask: ${s.title}${s.is_done ? " (done)" : ""} — target ${sDate.toLocaleDateString()}`}
-                      onClick={(e) => { e.stopPropagation(); onSelect(t); }}
-                    />
+                    <React.Fragment key={s.id}>
+                      <div
+                        className="pm-tl-submarker"
+                        style={{ left: leftPx, top: topPx, background: s.is_done ? "#A78BFA" : SUBTASK_COLOR, opacity: s.is_done ? 0.6 : 1 }}
+                        title={`${s.title}${s.is_done ? " ✓" : ""} — ${sDate.toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}`}
+                        onClick={(e) => { e.stopPropagation(); onSelect(t); }}
+                      />
+                      <div
+                        style={{
+                          position:"absolute", left: leftPx + 14, top: topPx - 1,
+                          fontSize:9.5, color: s.is_done ? "#A78BFA" : SUBTASK_COLOR,
+                          fontWeight:600, whiteSpace:"nowrap", pointerEvents:"none",
+                          textDecoration: s.is_done ? "line-through" : "none",
+                        }}
+                      >
+                        {s.title}
+                        <span style={{ color:"#9CA3AF", fontWeight:400, marginLeft:4 }}>
+                          {sDate.toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                        </span>
+                      </div>
+                    </React.Fragment>
                   );
                 })}
               </div>
