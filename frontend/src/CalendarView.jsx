@@ -49,16 +49,21 @@ export default function CalendarView({ tasks, onSelect, onCreateDate }) {
       });
   }, [tasks]);
 
-  // Subtasks with a target_at, keyed by day, for the small dot indicators
+  // Subtasks with a target_at, keyed by day, sorted by time of day
   const subtasksByDay = useMemo(() => {
     const map = {};
     for (const t of tasks) {
       for (const s of t.subtasks || []) {
         if (!s.target_at) continue;
-        const key = toKey(new Date(s.target_at));
+        const d = new Date(s.target_at);
+        const key = toKey(d);
         map[key] = map[key] || [];
-        map[key].push({ ...s, parentTitle: t.title, parentId: t.id });
+        map[key].push({ ...s, _date: d, parentTitle: t.title, parentId: t.id });
       }
+    }
+    // Sort each day's subtasks by time
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => a._date - b._date);
     }
     return map;
   }, [tasks]);
@@ -185,15 +190,21 @@ export default function CalendarView({ tasks, onSelect, onCreateDate }) {
                       <div className="pm-cal-daynum2">{d.getDate()}</div>
                       <Plus size={12} className="pm-cal-add-hint" />
                       {subDots.length > 0 && (
-                        <div className="pm-cal-subtask-dots">
-                          {subDots.slice(0, 6).map((s) => (
-                            <span
+                        <div style={{ marginTop:2 }}>
+                          {subDots.slice(0, 3).map((s) => (
+                            <div
                               key={s.id}
-                              className="pm-cal-subtask-dot"
-                              title={`Subtask: ${s.title} (${s.parentTitle})`}
+                              style={{ display:"flex", alignItems:"center", gap:3, fontSize:9.5, color: s.is_done ? "#A78BFA" : "#7C3AED", fontWeight:600, padding:"1px 0", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", cursor:"pointer", textDecoration: s.is_done ? "line-through" : "none" }}
+                              title={`${s.title} (${s.parentTitle})`}
                               onClick={(e) => { e.stopPropagation(); onSelect && onSelect({ id: s.parentId }); }}
-                            />
+                            >
+                              <span style={{ width:5, height:5, borderRadius:"50%", background: s.is_done ? "#A78BFA" : "#7C3AED", flexShrink:0 }} />
+                              {s._date.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })}_{s.title}
+                            </div>
                           ))}
+                          {subDots.length > 3 && (
+                            <div style={{ fontSize:9, color:"var(--muted)", paddingLeft:8 }}>+{subDots.length - 3} more</div>
+                          )}
                         </div>
                       )}
                       {hiddenHere > 0 && <div className="pm-cal-more">+{hiddenHere} more</div>}

@@ -120,10 +120,7 @@ export default function TimelineView({ tasks, onSelect }) {
                           textDecoration: s.is_done ? "line-through" : "none",
                         }}
                       >
-                        {s.title}
-                        <span style={{ color:"#9CA3AF", fontWeight:400, marginLeft:4 }}>
-                          {sDate.toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
-                        </span>
+                        {sDate.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })}_{s.title}
                       </div>
                     </React.Fragment>
                   );

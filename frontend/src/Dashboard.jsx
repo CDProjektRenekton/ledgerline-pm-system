@@ -111,6 +111,13 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newTaskFiles, setNewTaskFiles] = useState([]);
   // Subtask target date/time
   const [newSubtaskTarget, setNewSubtaskTarget] = useState("");
+  // Date-time picker widget state for subtask completion
+  const [completionPicker, setCompletionPicker] = useState(null); // { subtaskId, value }
+  // Subtask editing modal
+  const [editingSubtask, setEditingSubtask] = useState(null); // { id, title, target_at }
+  // Column resize widths
+  const [colWidths, setColWidths] = useState({ todo:270, inprogress:270, review:270, done:270 });
+  const isResizingCol = useRef(null); // { colId, startX, startW }
   // Pending invites (for the current user)
   const [pendingInvites, setPendingInvites] = useState([]);
   const [showInvites, setShowInvites] = useState(false);
@@ -335,7 +342,7 @@ export default function Dashboard({ token, user, onLogout }) {
   };
   const confirmStatusChange = () => {
     if (!pendingStatusChange) return;
-    patchTask(pendingStatusChange.taskId, { status: pendingStatusChange.status });
+    moveTaskDirect(pendingStatusChange.taskId, pendingStatusChange.status);
     setPendingStatusChange(null);
   };
 
@@ -468,13 +475,16 @@ export default function Dashboard({ token, user, onLogout }) {
   };
 
   const moveTask = async (id, status) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t))); // optimistic
-    try {
-      await api.updateTask(token, id, { status });
-    } catch (err) {
-      setError(err.message);
-      refreshTasks();
-    }
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    if (task.status === status) return; // same column reorder — no confirm needed
+    requestStatusChange(id, status, task.title);
+  };
+
+  const moveTaskDirect = async (id, status) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)));
+    try { await api.updateTask(token, id, { status }); }
+    catch (err) { setError(err.message); refreshTasks(); }
   };
 
   const reorderTasks = async (status, orderedIds) => {
@@ -604,32 +614,15 @@ export default function Dashboard({ token, user, onLogout }) {
 
   const toggleSubtask = async (id, is_done) => {
     if (is_done) {
-      // Ask for completion date/time, defaulting to now
+      // Show the date-time picker widget instead of window.prompt
       const defaultDt = new Date().toISOString().slice(0, 16);
-      const dtInput = window.prompt(
-        "When did you complete this subtask?\n(Format: YYYY-MM-DDTHH:MM or leave as-is for now)",
-        defaultDt
-      );
-      if (dtInput === null) return; // user cancelled
-      const completedAt = dtInput.trim() || defaultDt;
-      setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: true } : s)));
-      try {
-        const updated = await api.updateSubtask(token, id, { is_done: true, targetAt: completedAt });
-        // Refresh history to show the completion entry
-        const h = await api.taskHistory(token, selectedTask.id);
-        setHistory(h);
-        setTasks((prev) => prev.map((t) =>
-          t.id === updated.task_id
-            ? { ...t, subtasks: (t.subtasks || []).map((s) => s.id === id ? updated : s) }
-            : t
-        ));
-      } catch (err) { setError(err.message); setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: false } : s))); }
+      setCompletionPicker({ subtaskId: id, value: defaultDt });
     } else {
       setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: false } : s)));
       try {
         const updated = await api.updateSubtask(token, id, { is_done: false });
-        const h = await api.taskHistory(token, selectedTask.id);
-        setHistory(h);
+        const h = await api.taskHistory(token, selectedTask?.id);
+        if (h) setHistory(h);
         setTasks((prev) => prev.map((t) =>
           t.id === updated.task_id
             ? { ...t, subtasks: (t.subtasks || []).map((s) => s.id === id ? updated : s) }
@@ -637,6 +630,24 @@ export default function Dashboard({ token, user, onLogout }) {
         ));
       } catch (err) { setError(err.message); setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: true } : s))); }
     }
+  };
+
+  const confirmSubtaskCompletion = async () => {
+    if (!completionPicker) return;
+    const { subtaskId, value } = completionPicker;
+    setCompletionPicker(null);
+    const completedAt = value || new Date().toISOString().slice(0, 16);
+    setSubtasks((prev) => prev.map((s) => (s.id === subtaskId ? { ...s, is_done: true, target_at: completedAt } : s)));
+    try {
+      const updated = await api.updateSubtask(token, subtaskId, { is_done: true, targetAt: completedAt });
+      const h = await api.taskHistory(token, selectedTask?.id);
+      if (h) setHistory(h);
+      setTasks((prev) => prev.map((t) =>
+        t.id === updated.task_id
+          ? { ...t, subtasks: (t.subtasks || []).map((s) => s.id === subtaskId ? updated : s) }
+          : t
+      ));
+    } catch (err) { setError(err.message); setSubtasks((prev) => prev.map((s) => (s.id === subtaskId ? { ...s, is_done: false } : s))); }
   };
 
   const deleteSubtask = async (id) => {
@@ -670,6 +681,37 @@ export default function Dashboard({ token, user, onLogout }) {
       });
       return next.map((s, i) => ({ ...s, position: i }));
     });
+  };
+
+  const saveSubtaskEdit = async () => {
+    if (!editingSubtask) return;
+    const { id, title, target_at } = editingSubtask;
+    setEditingSubtask(null);
+    try {
+      const updated = await api.updateSubtask(token, id, { title, targetAt: target_at || undefined });
+      setSubtasks((prev) => prev.map((s) => s.id === id ? updated : s));
+      setTasks((prev) => prev.map((t) =>
+        t.subtasks ? { ...t, subtasks: t.subtasks.map((s) => s.id === id ? updated : s) } : t
+      ));
+    } catch (err) { setError(err.message); }
+  };
+
+  const startColResize = (e, colId) => {
+    e.preventDefault();
+    isResizingCol.current = { colId, startX: e.clientX, startW: colWidths[colId] };
+    const onMove = (ev) => {
+      if (!isResizingCol.current) return;
+      const { colId: cid, startX, startW } = isResizingCol.current;
+      const newW = Math.max(200, Math.min(500, startW + ev.clientX - startX));
+      setColWidths((prev) => ({ ...prev, [cid]: newW }));
+    };
+    const onUp = () => {
+      isResizingCol.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   const archiveProject = async (id, is_archived) => {
@@ -916,8 +958,16 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-tab { display: flex; align-items: center; gap: 6px; padding: 9px 14px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
         .pm-tab.active { color: var(--teal-deep); border-bottom: 2px solid var(--teal); font-weight: 600; }
         .pm-board { flex: 1; display: flex; gap: 16px; padding: 18px 28px 22px; overflow-x: auto; }
-        .pm-col { width: 270px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--paper-deep); border-radius: 12px; padding: 10px; max-height: 100%; }
+        .pm-col { flex-shrink: 0; display: flex; flex-direction: column; background: var(--paper-deep); border-radius: 12px; padding: 10px; max-height: 100%; position: relative; }
         .pm-col.dragover { outline: 2px dashed var(--teal); outline-offset: -4px; }
+        .pm-col-resize { position:absolute; top:0; right:0; width:5px; height:100%; cursor:col-resize; z-index:5; background:transparent; border-radius:0 12px 12px 0; }
+        .pm-col-resize:hover { background:rgba(26,127,168,0.18); }
+        .pm-completion-overlay { position:fixed; inset:0; background:rgba(11,79,108,0.22); z-index:300; display:flex; align-items:center; justify-content:center; }
+        .pm-completion-widget { background:#fff; border-radius:14px; padding:24px 26px; width:320px; box-shadow:0 12px 40px rgba(11,79,108,0.22); }
+        .pm-completion-title { font-size:15px; font-weight:700; color:var(--teal-deep); margin-bottom:4px; }
+        .pm-completion-sub { font-size:12.5px; color:var(--muted); margin-bottom:16px; }
+        .pm-subtask-meta { font-size:10.5px; color:var(--muted); margin-top:2px; display:flex; align-items:center; gap:4px; }
+        .pm-subtask-meta.completed { color:#7C3AED; }
         .pm-col-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 10px; }
         .pm-col-head-left { display: flex; align-items: baseline; gap: 7px; }
         .pm-col-no { font-size: 10.5px; color: var(--muted); }
@@ -1012,6 +1062,7 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-subtask-title.done { text-decoration:line-through; color:var(--muted); }
         .pm-subtask-del { cursor:pointer; color:var(--muted); opacity:0; transition:opacity 0.15s; }
         .pm-subtask-row:hover .pm-subtask-del { opacity:1; }
+        .pm-subtask-row:hover .pm-subtask-edit-btn { opacity:1 !important; }
         .pm-subtask-add { display:flex; gap:7px; margin-top:8px; }
         .pm-subtask-add input { flex:1; border:1px dashed var(--border); border-radius:7px; padding:6px 9px; font-size:12.5px; outline:none; }
         .pm-subtask-add input:focus { border-color:var(--teal); background:var(--card); }
@@ -1271,10 +1322,12 @@ export default function Dashboard({ token, user, onLogout }) {
                 <div
                   key={col.id}
                   className={`pm-col ${dragOverCol === col.id ? "dragover" : ""}`}
+                  style={{ width: colWidths[col.id] }}
                   onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
                   onDragLeave={() => setDragOverCol(null)}
-                  onDrop={() => { if (dragTaskId.current) moveTask(dragTaskId.current, col.id); setDragOverCol(null); }}
+                  onDrop={() => { if (dragTaskId.current) { moveTask(dragTaskId.current, col.id); setDragOverCol(null); } }}
                 >
+                  <div className="pm-col-resize" onMouseDown={(e) => startColResize(e, col.id)} />
                   <div className="pm-col-head">
                     <div className="pm-col-head-left">
                       <span className="pm-col-no pm-mono">{col.no}</span>
@@ -1353,20 +1406,31 @@ export default function Dashboard({ token, user, onLogout }) {
                         {t.subtasks && t.subtasks.length > 0 && (
                           <div style={{ margin:"6px 0 4px", borderTop:"1px solid var(--border)", paddingTop:5 }}>
                             {t.subtasks.slice(0, 4).map((s) => (
-                              <div
-                                key={s.id}
-                                style={{ display:"flex", alignItems:"center", gap:6, padding:"2px 0", cursor:"pointer" }}
-                                onClick={(e) => { e.stopPropagation(); setSelectedTask(t); }}
-                              >
-                                <span
-                                  style={{ color: s.is_done ? "var(--teal)" : "var(--muted)", flexShrink:0, display:"flex" }}
-                                  onClick={(e) => { e.stopPropagation(); toggleSubtask(s.id, !s.is_done); }}
+                              <div key={s.id} style={{ padding:"3px 0", borderBottom:"1px solid #EEF6FC" }}>
+                                <div
+                                  style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}
+                                  onClick={(e) => { e.stopPropagation(); setSelectedTask(t); }}
                                 >
-                                  {s.is_done ? <CheckSquare size={12} /> : <Square size={12} />}
-                                </span>
-                                <span style={{ fontSize:11, color: s.is_done ? "var(--muted)" : "var(--ink)", textDecoration: s.is_done ? "line-through" : "none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                  {s.title}
-                                </span>
+                                  <span
+                                    style={{ color: s.is_done ? "var(--teal)" : "var(--muted)", flexShrink:0, display:"flex" }}
+                                    onClick={(e) => { e.stopPropagation(); toggleSubtask(s.id, !s.is_done); }}
+                                  >
+                                    {s.is_done ? <CheckSquare size={12} /> : <Square size={12} />}
+                                  </span>
+                                  <span style={{ fontSize:11, flex:1, color: s.is_done ? "var(--muted)" : "var(--ink)", textDecoration: s.is_done ? "line-through" : "none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                    {s.title}
+                                  </span>
+                                </div>
+                                {s.target_at && !s.is_done && (
+                                  <div className="pm-subtask-meta" style={{ paddingLeft:18 }}>
+                                    🎯 {new Date(s.target_at).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                                  </div>
+                                )}
+                                {s.is_done && s.target_at && (
+                                  <div className="pm-subtask-meta completed" style={{ paddingLeft:18 }}>
+                                    ✓ Completed {new Date(s.target_at).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                                  </div>
+                                )}
                               </div>
                             ))}
                             {t.subtasks.length > 4 && (
@@ -1730,6 +1794,87 @@ export default function Dashboard({ token, user, onLogout }) {
       })()}
 
       {/* -- Status Change Confirmation -- */}
+      {/* -- Completion Date-Time Picker Widget -- */}
+      {completionPicker && (() => {
+        const sub = subtasks.find((s) => s.id === completionPicker.subtaskId) ||
+          tasks.flatMap((t) => t.subtasks || []).find((s) => s.id === completionPicker.subtaskId);
+        return (
+          <div className="pm-completion-overlay" onClick={() => setCompletionPicker(null)}>
+            <div className="pm-completion-widget" onClick={(e) => e.stopPropagation()}>
+              <div className="pm-completion-title">Mark Subtask Complete</div>
+              <div className="pm-completion-sub">
+                {sub ? `"${sub.title}"` : "Subtask"} — when was this completed?
+              </div>
+              <div style={{ marginBottom:16 }}>
+                <label style={{ fontSize:11.5, color:"var(--muted)", fontWeight:600, display:"block", marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+                  Completion Date &amp; Time
+                </label>
+                <input
+                  type="datetime-local"
+                  value={completionPicker.value}
+                  onChange={(e) => setCompletionPicker((prev) => ({ ...prev, value: e.target.value }))}
+                  style={{ width:"100%", border:"1.5px solid var(--border)", borderRadius:9, padding:"9px 12px", fontSize:14, outline:"none", fontFamily:"inherit" }}
+                  autoFocus
+                />
+              </div>
+              <div style={{ display:"flex", gap:9 }}>
+                <button
+                  className="pm-btn-cancel"
+                  style={{ flex:1, padding:"9px 0" }}
+                  onClick={() => setCompletionPicker(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="pm-btn-primary"
+                  style={{ flex:1, padding:"9px 0", justifyContent:"center" }}
+                  onClick={confirmSubtaskCompletion}
+                >
+                  <CheckSquare size={14} /> Mark Done
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* -- Edit Subtask Modal -- */}
+      {editingSubtask && (
+        <div className="pm-modal-overlay" onClick={() => setEditingSubtask(null)}>
+          <div className="pm-modal" style={{ maxWidth:400 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">Edit Subtask</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setEditingSubtask(null)} />
+            </div>
+            <div className="pm-modal-body">
+              <div className="pm-field-row">
+                <label>Title</label>
+                <input
+                  autoFocus
+                  value={editingSubtask.title}
+                  onChange={(e) => setEditingSubtask((prev) => ({ ...prev, title: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && saveSubtaskEdit()}
+                />
+              </div>
+              <div className="pm-field-row">
+                <label>Target Date &amp; Time</label>
+                <input
+                  type="datetime-local"
+                  value={editingSubtask.target_at || ""}
+                  onChange={(e) => setEditingSubtask((prev) => ({ ...prev, target_at: e.target.value }))}
+                />
+              </div>
+              <div className="pm-modal-footer">
+                <button className="pm-btn-cancel" onClick={() => setEditingSubtask(null)}>Cancel</button>
+                <button className="pm-btn-primary" onClick={saveSubtaskEdit} disabled={!editingSubtask.title.trim()}>
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingStatusChange && (
         <div className="pm-modal-overlay" onClick={() => setPendingStatusChange(null)}>
           <div className="pm-modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
@@ -1959,21 +2104,34 @@ export default function Dashboard({ token, user, onLogout }) {
                   onDragStart={() => handleSubtaskDragStart(s.id)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => handleSubtaskDrop(s.id)}
-                  style={{ cursor:"grab" }}
+                  style={{ cursor:"grab", alignItems:"flex-start" }}
                 >
-                  <span style={{ color:"var(--muted)", fontSize:10, marginRight:2, cursor:"grab" }}>⠿</span>
-                  <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} onClick={() => toggleSubtask(s.id, !s.is_done)}>
+                  <span style={{ color:"var(--muted)", fontSize:10, marginRight:2, cursor:"grab", marginTop:2 }}>⠿</span>
+                  <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} style={{ marginTop:2 }} onClick={() => toggleSubtask(s.id, !s.is_done)}>
                     {s.is_done ? <CheckSquare size={16} /> : <Square size={16} />}
                   </span>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div className={`pm-subtask-title ${s.is_done ? "done" : ""}`}>{s.title}</div>
-                    {s.target_at && (
-                      <div style={{ fontSize:10.5, color: s.is_done ? "var(--muted)" : "#7C3AED", fontWeight:600 }}>
+                    {s.target_at && !s.is_done && (
+                      <div className="pm-subtask-meta">
                         🎯 {new Date(s.target_at).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
                       </div>
                     )}
+                    {s.is_done && s.target_at && (
+                      <div className="pm-subtask-meta completed">
+                        ✓ Completed {new Date(s.target_at).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                      </div>
+                    )}
                   </div>
-                  <X size={13} className="pm-subtask-del" onClick={() => deleteSubtask(s.id)} />
+                  <span
+                    title="Edit subtask"
+                    style={{ cursor:"pointer", color:"var(--muted)", opacity:0, transition:"opacity .15s", fontSize:11, marginTop:2 }}
+                    className="pm-subtask-edit-btn"
+                    onClick={() => setEditingSubtask({ id: s.id, title: s.title, target_at: s.target_at ? new Date(s.target_at).toISOString().slice(0,16) : "" })}
+                  >
+                    ✎
+                  </span>
+                  <X size={13} className="pm-subtask-del" style={{ marginTop:2 }} onClick={() => deleteSubtask(s.id)} />
                 </div>
               ))}
               <div className="pm-subtask-add" style={{ flexDirection:"column", alignItems:"stretch", gap:6 }}>
