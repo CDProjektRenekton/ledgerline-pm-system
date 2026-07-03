@@ -373,11 +373,25 @@ export default function Dashboard({ token, user, onLogout }) {
     setUnreadCount(0);
     setTaskUnreadCounts({});
     setProjectUnreadCounts({});
-    try {
-      await api.markAllNotificationsRead(token);
-    } catch (err) {
-      setError(err.message);
+    try { await api.markAllNotificationsRead(token); } catch (err) { setError(err.message); }
+  };
+
+  const dismissNotification = async (id) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    const dismissed = notifications.find((n) => n.id === id);
+    if (dismissed && !dismissed.is_read) {
+      setUnreadCount((c) => Math.max(0, c - 1));
+      if (dismissed.task_id) setTaskUnreadCounts((prev) => { const n = { ...prev }; n[dismissed.task_id] = Math.max(0, (n[dismissed.task_id] || 1) - 1); if (!n[dismissed.task_id]) delete n[dismissed.task_id]; return n; });
     }
+    try { await api.dismissNotification(token, id); } catch (err) { setError(err.message); }
+  };
+
+  const clearAllNotifications = async () => {
+    setNotifications([]);
+    setUnreadCount(0);
+    setTaskUnreadCounts({});
+    setProjectUnreadCounts({});
+    try { await api.clearAllNotifications(token); } catch (err) { setError(err.message); }
   };
 
   // Load tasks + members + teams whenever the active project changes
@@ -1140,7 +1154,7 @@ export default function Dashboard({ token, user, onLogout }) {
               <div style={{ position: "relative" }} title="Project invitations">
                 <div
                   className="pm-bell-btn"
-                  onClick={() => setShowInvites((v) => !v)}
+                  onClick={(e) => { e.stopPropagation(); setShowInvites((v) => !v); }}
                   style={{ position:"relative" }}
                 >
                   <Mail size={15} />
@@ -1204,6 +1218,8 @@ export default function Dashboard({ token, user, onLogout }) {
                 unreadCount={unreadCount}
                 onMarkRead={markNotificationRead}
                 onMarkAllRead={markAllNotificationsRead}
+                onDismiss={dismissNotification}
+                onClearAll={clearAllNotifications}
               />
               {activeProject && (
                 <button className="pm-btn-ghost" onClick={openReport} title="Generate a full project report">

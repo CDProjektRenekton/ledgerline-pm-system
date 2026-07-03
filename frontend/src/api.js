@@ -91,6 +91,8 @@ export const api = {
   notificationCounts: (token) => request("/notifications/counts", { token }),
   markNotificationRead: (token, id) => request(`/notifications/${id}/read`, { method: "PATCH", token }),
   markAllNotificationsRead: (token) => request("/notifications/read-all", { method: "PATCH", token }),
+  dismissNotification: (token, id) => request(`/notifications/${id}`, { method: "DELETE", token }),
+  clearAllNotifications: (token) => request("/notifications", { method: "DELETE", token }),
 
   listMessages: (token, projectId) => request(`/messages?projectId=${projectId}`, { token }),
   sendMessage: (token, projectId, body, taskRefId, mentionUserIds) =>
