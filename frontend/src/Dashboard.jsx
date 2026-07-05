@@ -114,7 +114,11 @@ export default function Dashboard({ token, user, onLogout }) {
   // Date-time picker widget state for subtask completion
   const [completionPicker, setCompletionPicker] = useState(null); // { subtaskId, value }
   // Subtask editing modal
-  const [editingSubtask, setEditingSubtask] = useState(null); // { id, title, target_at }
+  const [editingSubtask, setEditingSubtask] = useState(null);
+  const [taskLinks, setTaskLinks] = useState([]);
+  const [newLinkLabel, setNewLinkLabel] = useState("");
+  const [newLinkUrl, setNewLinkUrl] = useState("");
+  const [showAddLink, setShowAddLink] = useState(false); // { id, title, target_at }
   // Column resize widths
   const [colWidths, setColWidths] = useState({ todo:270, inprogress:270, review:270, done:270 });
   const isResizingCol = useRef(null); // { colId, startX, startW }
@@ -439,6 +443,8 @@ export default function Dashboard({ token, user, onLogout }) {
       setAttachments([]);
       setHistory([]);
       setSubtasks([]);
+      setTaskLinks([]);
+      setShowAddLink(false);
       setEditTitle(null);
       setEditDesc(null);
       return;
@@ -452,16 +458,18 @@ export default function Dashboard({ token, user, onLogout }) {
     }
     (async () => {
       try {
-        const [c, a, h, s] = await Promise.all([
+        const [c, a, h, s, l] = await Promise.all([
           api.listComments(token, selectedTask.id),
           api.listAttachments(token, selectedTask.id),
           api.taskHistory(token, selectedTask.id),
           api.listSubtasks(token, selectedTask.id),
+          api.listLinks(token, selectedTask.id),
         ]);
         setComments(c);
         setAttachments(a);
         setHistory(h);
         setSubtasks(s);
+        setTaskLinks(l);
       } catch (err) {
         setError(err.message);
       }
@@ -470,8 +478,12 @@ export default function Dashboard({ token, user, onLogout }) {
 
   const refreshTasks = async () => {
     if (!activeProject) return;
-    const taskList = await api.listTasks(token, activeProject.id);
-    setTasks(taskList);
+    try {
+      const taskList = await api.listTasks(token, activeProject.id);
+      setTasks(taskList);
+    } catch (err) {
+      console.warn("refreshTasks failed (non-fatal):", err.message);
+    }
   };
 
   const moveTask = async (id, status) => {
@@ -1086,14 +1098,19 @@ export default function Dashboard({ token, user, onLogout }) {
           </div>
         </div>
 
-        <div className="pm-sidebar-section">Projects</div>
-        {projects.map((p) => (
+        {/* My Projects */}
+        {projects.filter((p) => p.my_role === "owner" || p.my_role === "admin").length > 0 && (
+          <div className="pm-sidebar-section" style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span>🗂</span> My Projects
+          </div>
+        )}
+        {projects.filter((p) => p.my_role === "owner" || p.my_role === "admin").map((p) => (
           <div
             key={p.id}
             className={`pm-proj-item ${activeProject && activeProject.id === p.id ? "active" : ""}`}
             onClick={() => setActiveProject(p)}
           >
-            <span className="pm-proj-dot" style={{ background: "#5CC8F0" }} />
+            <span style={{ fontSize:12, flexShrink:0 }}>{p.my_role === "owner" ? "👑" : "🛡"}</span>
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
             {projectUnreadCounts[p.id] > 0 && (
               <span className="pm-proj-badge">{projectUnreadCounts[p.id] > 9 ? "9+" : projectUnreadCounts[p.id]}</span>
@@ -1101,6 +1118,26 @@ export default function Dashboard({ token, user, onLogout }) {
             <Archive size={12} className="pm-proj-del" title="Archive" onClick={(e) => { e.stopPropagation(); archiveProject(p.id, true); }} />
             {p.my_role === "owner" && (
               <Trash2 size={12} className="pm-proj-del" title="Delete" onClick={(e) => removeProject(e, p)} />
+            )}
+          </div>
+        ))}
+
+        {/* Invited Projects */}
+        {projects.filter((p) => p.my_role === "member").length > 0 && (
+          <div className="pm-sidebar-section" style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <span>👥</span> Invited Projects
+          </div>
+        )}
+        {projects.filter((p) => p.my_role === "member").map((p) => (
+          <div
+            key={p.id}
+            className={`pm-proj-item ${activeProject && activeProject.id === p.id ? "active" : ""}`}
+            onClick={() => setActiveProject(p)}
+          >
+            <span style={{ fontSize:12, flexShrink:0 }}>👤</span>
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+            {projectUnreadCounts[p.id] > 0 && (
+              <span className="pm-proj-badge">{projectUnreadCounts[p.id] > 9 ? "9+" : projectUnreadCounts[p.id]}</span>
             )}
           </div>
         ))}
@@ -2209,17 +2246,93 @@ export default function Dashboard({ token, user, onLogout }) {
 
             <div className="pm-field-label">Attachments</div>
             {attachments.map((a) => (
-              <div className="pm-attachment" key={a.id}>
-                <a href={`${API_ORIGIN}${a.url}`} target="_blank" rel="noreferrer" className="pm-attachment-link">
-                  <Paperclip size={12} /> {a.filename}
-                </a>
-                <Trash2 size={13} className="pm-attachment-del" onClick={() => removeAttachment(a.id)} />
+              <div className="pm-attachment" key={a.id} style={{ flexDirection:"column", alignItems:"flex-start", gap:2 }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%" }}>
+                  <a href={`${API_ORIGIN}${a.url}`} target="_blank" rel="noreferrer" className="pm-attachment-link">
+                    <Paperclip size={12} /> {a.filename}
+                  </a>
+                  <Trash2 size={13} className="pm-attachment-del" onClick={() => removeAttachment(a.id)} />
+                </div>
+                <div style={{ fontSize:10.5, color:"var(--muted)", paddingLeft:18 }}>
+                  {a.uploaded_by_name ? `${a.uploaded_by_name} · ` : ""}
+                  {a.created_at ? new Date(a.created_at).toLocaleString([], { month:"short", day:"numeric", year:"numeric", hour:"2-digit", minute:"2-digit" }) : ""}
+                </div>
               </div>
             ))}
             <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelected} />
             <div className="pm-btn-ghost" style={{ marginTop: 8, width: "fit-content" }} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
               <Upload size={13} /> {uploading ? "Uploading…" : "Upload file"}
             </div>
+
+            <div className="pm-field-label" style={{ marginTop:14, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <span>Links</span>
+              <span
+                style={{ fontSize:11, color:"var(--teal)", cursor:"pointer", fontWeight:600 }}
+                onClick={() => setShowAddLink((v) => !v)}
+              >
+                {showAddLink ? "Cancel" : "+ Add link"}
+              </span>
+            </div>
+            {showAddLink && (
+              <div style={{ background:"var(--paper-deep)", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
+                <input
+                  placeholder="Link name (e.g. Google Drive folder)"
+                  value={newLinkLabel}
+                  onChange={(e) => setNewLinkLabel(e.target.value)}
+                  style={{ width:"100%", border:"1.5px solid var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit", marginBottom:7 }}
+                />
+                <input
+                  placeholder="URL (e.g. https://drive.google.com/…)"
+                  value={newLinkUrl}
+                  onChange={(e) => setNewLinkUrl(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && newLinkLabel.trim() && newLinkUrl.trim()) {
+                      try {
+                        const link = await api.addLink(token, selectedTask.id, newLinkLabel.trim(), newLinkUrl.trim());
+                        setTaskLinks((prev) => [...prev, link]);
+                        setNewLinkLabel(""); setNewLinkUrl(""); setShowAddLink(false);
+                      } catch (err) { setError(err.message); }
+                    }
+                  }}
+                  style={{ width:"100%", border:"1.5px solid var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit", marginBottom:7 }}
+                />
+                <button
+                  className="pm-btn-primary"
+                  style={{ padding:"6px 14px", fontSize:12.5 }}
+                  onClick={async () => {
+                    if (!newLinkLabel.trim() || !newLinkUrl.trim()) return;
+                    try {
+                      const link = await api.addLink(token, selectedTask.id, newLinkLabel.trim(), newLinkUrl.trim());
+                      setTaskLinks((prev) => [...prev, link]);
+                      setNewLinkLabel(""); setNewLinkUrl(""); setShowAddLink(false);
+                    } catch (err) { setError(err.message); }
+                  }}
+                  disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}
+                >
+                  Add Link
+                </button>
+              </div>
+            )}
+            {taskLinks.map((l) => (
+              <div key={l.id} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:6 }}>
+                <a
+                  href={l.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ flex:1, display:"flex", alignItems:"center", gap:6, padding:"6px 10px", background:"#EFF8FF", border:"1px solid #BFDBFE", borderRadius:8, fontSize:12.5, color:"#1D4ED8", fontWeight:600, textDecoration:"none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                >
+                  🔗 {l.label}
+                </a>
+                <Trash2
+                  size={13}
+                  style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }}
+                  onClick={async () => {
+                    try { await api.deleteLink(token, l.id); setTaskLinks((prev) => prev.filter((x) => x.id !== l.id)); }
+                    catch (err) { setError(err.message); }
+                  }}
+                />
+              </div>
+            ))}
 
             <div className="pm-field-label" style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
               <span>Activity {activityFeed.length > 0 && `(${activityFeed.length})`}</span>

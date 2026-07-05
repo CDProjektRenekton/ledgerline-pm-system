@@ -280,40 +280,40 @@ router.patch("/:id", async (req, res) => {
   const task = result.rows[0];
   emitToProject(task.project_id, "task:updated", task);
 
-  // --- Activity trail: log every field that actually changed ---
+  // --- Activity trail: log every field that actually changed (with actor name) ---
   if ("title" in body && existing.title !== task.title) {
-    await logHistory(task.id, req.user.id, "title_changed", `Title changed to "${task.title}"`);
+    await logHistory(task.id, req.user.id, "title_changed", `${req.user.name} renamed the task to "${task.title}"`);
   }
   if ("description" in body && existing.description !== task.description) {
-    await logHistory(task.id, req.user.id, "description_changed", `Description updated`);
+    await logHistory(task.id, req.user.id, "description_changed", `${req.user.name} updated the description`);
   }
   if ("status" in body && existing.status !== task.status) {
-    await logHistory(task.id, req.user.id, "status_changed", `Status changed from "${STATUS_LABEL[existing.status]}" to "${STATUS_LABEL[task.status]}"`);
+    await logHistory(task.id, req.user.id, "status_changed", `${req.user.name} moved the task from "${STATUS_LABEL[existing.status]}" to "${STATUS_LABEL[task.status]}"`);
   }
   if ("priority" in body && existing.priority !== task.priority) {
-    await logHistory(task.id, req.user.id, "priority_changed", `Priority changed from ${existing.priority} to ${task.priority}`);
+    await logHistory(task.id, req.user.id, "priority_changed", `${req.user.name} changed priority from ${existing.priority} to ${task.priority}`);
   }
   if ("dueDate" in body && String(existing.due_date) !== String(task.due_date)) {
     const dateLabel = task.due_date ? new Date(task.due_date).toISOString().slice(0, 10) : null;
-    await logHistory(task.id, req.user.id, "due_date_changed", dateLabel ? `Due date set to ${dateLabel}` : "Due date cleared");
+    await logHistory(task.id, req.user.id, "due_date_changed", dateLabel ? `${req.user.name} set due date to ${dateLabel}` : `${req.user.name} cleared the due date`);
   }
   if ("startDate" in body && String(existing.start_date) !== String(task.start_date)) {
     const dateLabel = task.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : null;
-    await logHistory(task.id, req.user.id, "start_date_changed", dateLabel ? `Start date set to ${dateLabel}` : "Start date cleared");
+    await logHistory(task.id, req.user.id, "start_date_changed", dateLabel ? `${req.user.name} set start date to ${dateLabel}` : `${req.user.name} cleared the start date`);
   }
   if ("category" in body && existing.category !== task.category) {
-    await logHistory(task.id, req.user.id, "category_changed", `Category changed to ${task.category}`);
+    await logHistory(task.id, req.user.id, "category_changed", `${req.user.name} changed category to ${task.category}`);
   }
   if (("assigneeId" in body && existing.assignee_id !== task.assignee_id) ||
       ("assigneeTeamId" in body && existing.assignee_team_id !== task.assignee_team_id)) {
     if (task.assignee_id) {
       const n = await nameForUser(task.assignee_id);
-      await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to ${n}`);
+      await logHistory(task.id, req.user.id, "assignee_changed", `${req.user.name} assigned the task to ${n}`);
     } else if (task.assignee_team_id) {
       const n = await nameForTeam(task.assignee_team_id);
-      await logHistory(task.id, req.user.id, "assignee_changed", `Assigned to team ${n}`);
+      await logHistory(task.id, req.user.id, "assignee_changed", `${req.user.name} assigned the task to team ${n}`);
     } else {
-      await logHistory(task.id, req.user.id, "assignee_changed", `Unassigned`);
+      await logHistory(task.id, req.user.id, "assignee_changed", `${req.user.name} unassigned the task`);
     }
   }
 
@@ -331,7 +331,7 @@ router.patch("/:id", async (req, res) => {
     for (const uid of recipients) {
       const notifResult = await db.query(
         `INSERT INTO notifications (user_id, task_id, type, message) VALUES ($1, $2, 'status_change', $3) RETURNING *`,
-        [uid, task.id, `"${task.title}" moved to ${STATUS_LABEL[body.status]}`]
+        [uid, task.id, `${req.user.name} moved "${task.title}" to ${STATUS_LABEL[body.status]}`]
       );
       emitToUser(uid, "notification:new", notifResult.rows[0]);
 

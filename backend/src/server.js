@@ -14,6 +14,7 @@ const attachmentRoutes = require("./routes/attachments");
 const teamRoutes = require("./routes/teams");
 const subtaskRoutes = require("./routes/subtasks");
 const messageRoutes = require("./routes/messages");
+const linkRoutes    = require("./routes/links");
 const { startScheduler } = require("./jobs/dueDateScheduler");
 const socket = require("./socket");
 
@@ -34,6 +35,7 @@ app.use("/api/attachments", attachmentRoutes);
 app.use("/api/teams", teamRoutes);
 app.use("/api/subtasks", subtaskRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/links",    linkRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 app.use((err, req, res, next) => {

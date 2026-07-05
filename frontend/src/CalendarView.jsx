@@ -1,55 +1,48 @@
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 
-const PRIORITY_COLOR = { high: "#EF4444", medium: "#F59E0B", low: "#6B92AD" };
-const STATUS_COLOR = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
+const STATUS_COLOR = { todo:"#6B92AD", inprogress:"#1A7FA8", review:"#F59E0B", done:"#10B981" };
+const PRIORITY_COLOR = { high:"#EF4444", medium:"#F59E0B", low:"#6B92AD" };
 
-function startOfMonth(date) { return new Date(date.getFullYear(), date.getMonth(), 1); }
-function daysInMonth(date) { return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate(); }
+function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function daysInMonth(d) { return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); }
 function toKey(d) {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
-
-const MAX_BARS_PER_WEEK = 3;
 
 export default function CalendarView({ tasks, onSelect, onCreateDate }) {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
 
   const totalDays = daysInMonth(cursor);
   const firstWeekday = startOfMonth(cursor).getDay();
-  const monthLabel = cursor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const monthLabel = cursor.toLocaleDateString("en-US", { month:"long", year:"numeric" });
   const todayKey = toKey(new Date());
 
-  // Build the full visible grid as actual Date objects (nulls for empty leading cells)
+  // Build 6-row grid (42 cells) so layout is always consistent
   const gridDays = useMemo(() => {
     const cells = [];
     for (let i = 0; i < firstWeekday; i++) cells.push(null);
     for (let d = 1; d <= totalDays; d++) cells.push(new Date(cursor.getFullYear(), cursor.getMonth(), d));
-    while (cells.length % 7 !== 0) cells.push(null);
+    while (cells.length < 42) cells.push(null);
     return cells;
   }, [cursor, totalDays, firstWeekday]);
 
   const weeks = useMemo(() => {
     const w = [];
-    for (let i = 0; i < gridDays.length; i += 7) w.push(gridDays.slice(i, i + 7));
+    for (let i = 0; i < gridDays.length; i += 7) w.push(gridDays.slice(i, i+7));
     return w;
   }, [gridDays]);
 
-  // Tasks that span a date range — anchor everything to start_date..due_date,
-  // falling back to a single-day bar at due_date if no start_date is set.
+  // Task spanning bars: use start_date..due_date, fall back to single-day on due_date
   const rangedTasks = useMemo(() => {
-    return tasks
-      .filter((t) => t.due_date)
-      .map((t) => {
-        const due = new Date(t.due_date);
-        const start = t.start_date ? new Date(t.start_date) : due;
-        return { ...t, _start: start <= due ? start : due, _end: due };
-      });
+    return tasks.filter(t => t.due_date).map(t => {
+      const end = new Date(t.due_date);
+      const start = t.start_date ? new Date(t.start_date) : end;
+      return { ...t, _start: start <= end ? start : end, _end: end };
+    });
   }, [tasks]);
 
-  // Subtasks with a target_at, keyed by day, sorted by time of day
+  // Subtasks by day, sorted by time
   const subtasksByDay = useMemo(() => {
     const map = {};
     for (const t of tasks) {
@@ -57,193 +50,194 @@ export default function CalendarView({ tasks, onSelect, onCreateDate }) {
         if (!s.target_at) continue;
         const d = new Date(s.target_at);
         const key = toKey(d);
-        map[key] = map[key] || [];
-        map[key].push({ ...s, _date: d, parentTitle: t.title, parentId: t.id });
+        (map[key] = map[key] || []).push({ ...s, _date:d, parentId:t.id });
       }
     }
-    // Sort each day's subtasks by time
-    for (const key of Object.keys(map)) {
-      map[key].sort((a, b) => a._date - b._date);
-    }
+    for (const k of Object.keys(map)) map[k].sort((a,b) => a._date - b._date);
     return map;
   }, [tasks]);
 
-  // For each week, compute which task-bars are active and their column span
-  // within that week (0-6), then stack them into rows to avoid overlap.
-  const weekBars = useMemo(() => {
-    return weeks.map((week) => {
-      const weekDates = week.filter(Boolean);
-      if (weekDates.length === 0) return [];
-      const weekStart = week.find(Boolean);
-      const weekEnd = [...week].reverse().find(Boolean);
-      if (!weekStart || !weekEnd) return [];
+  // For each week, compute event bars with row stacking
+  const weekBars = useMemo(() => weeks.map(week => {
+    const validDays = week.filter(Boolean);
+    if (!validDays.length) return [];
+    const wStart = week.find(Boolean);
+    const wEnd = [...week].reverse().find(Boolean);
 
-      const activeInWeek = rangedTasks
-        .filter((t) => t._start <= weekEnd && t._end >= weekStart)
-        .map((t) => {
-          const clipStart = t._start < weekStart ? weekStart : t._start;
-          const clipEnd = t._end > weekEnd ? weekEnd : t._end;
-          const startCol = week.findIndex((d) => d && toKey(d) === toKey(clipStart));
-          const endCol = week.findIndex((d) => d && toKey(d) === toKey(clipEnd));
-          return {
-            task: t,
-            startCol: startCol === -1 ? 0 : startCol,
-            endCol: endCol === -1 ? 6 : endCol,
-            continuesLeft: t._start < weekStart,
-            continuesRight: t._end > weekEnd,
-          };
-        })
-        .sort((a, b) => a.startCol - b.startCol || (b.endCol - b.startCol) - (a.endCol - a.startCol));
+    const active = rangedTasks
+      .filter(t => t._start <= wEnd && t._end >= wStart)
+      .map(t => {
+        const cs = t._start < wStart ? wStart : t._start;
+        const ce = t._end > wEnd ? wEnd : t._end;
+        const sc = week.findIndex(d => d && toKey(d) === toKey(cs));
+        const ec = week.findIndex(d => d && toKey(d) === toKey(ce));
+        return { task:t, sc: sc<0?0:sc, ec: ec<0?6:ec, left: t._start < wStart, right: t._end > wEnd };
+      })
+      .sort((a,b) => a.sc - b.sc || (b.ec-b.sc)-(a.ec-a.sc));
 
-      // Greedy row-stacking: place each bar in the first row where it doesn't overlap
-      const rows = [];
-      for (const bar of activeInWeek) {
-        let placed = false;
-        for (const row of rows) {
-          const overlaps = row.some((b) => !(bar.endCol < b.startCol || bar.startCol > b.endCol));
-          if (!overlaps) { row.push(bar); placed = true; break; }
-        }
-        if (!placed) rows.push([bar]);
+    // Greedy row stacking
+    const rows = [];
+    for (const bar of active) {
+      let placed = false;
+      for (const row of rows) {
+        if (!row.some(b => !(bar.ec < b.sc || bar.sc > b.ec))) { row.push(bar); placed=true; break; }
       }
-      return rows;
-    });
-  }, [weeks, rangedTasks]);
+      if (!placed) rows.push([bar]);
+    }
+    return rows;
+  }), [weeks, rangedTasks]);
 
-  const changeMonth = (delta) => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1));
+  const changeMonth = (d) => setCursor(new Date(cursor.getFullYear(), cursor.getMonth()+d, 1));
+
+  const BAR_H = 18;   // bar height in px
+  const BAR_GAP = 3;  // gap between bars
+  const CELL_TOP = 28; // space for day number
 
   return (
-    <div className="pm-calwrap">
+    <div style={{ padding:"16px 24px 20px", overflow:"auto", flex:1 }}>
       <style>{`
-        .pm-calwrap { padding: 18px 28px 22px; overflow-y: auto; flex: 1; }
-        .pm-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-        .pm-cal-nav { display: flex; align-items: center; gap: 10px; }
-        .pm-cal-navbtn { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--border); background: var(--card); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-        .pm-cal-navbtn:hover { background: var(--paper-deep); }
-        .pm-cal-month { font-family: 'Merriweather', serif; font-size: 17px; font-weight: 700; color: var(--teal-deep); }
-        .pm-cal-grid2 { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
-        .pm-cal-weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); background: var(--paper-deep); border-bottom: 1px solid var(--border); }
-        .pm-cal-weekday2 { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); text-align: center; padding: 8px 0; font-weight: 600; }
-        .pm-cal-week-row { position: relative; border-bottom: 1px solid var(--border); }
-        .pm-cal-week-row:last-child { border-bottom: none; }
-        .pm-cal-day-cells { display: grid; grid-template-columns: repeat(7, 1fr); }
-        .pm-cal-cell2 { min-height: 108px; border-right: 1px solid var(--border); padding: 5px 6px; cursor: pointer; transition: background .12s; position: relative; }
-        .pm-cal-cell2:last-child { border-right: none; }
-        .pm-cal-cell2:hover { background: #F4FAFE; }
-        .pm-cal-cell2.empty { background: #FBFDFF; cursor: default; }
-        .pm-cal-cell2.today .pm-cal-daynum2 { background: var(--teal); color: #fff; }
-        .pm-cal-daynum2 { font-size: 11px; color: var(--muted); width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 600; }
-        .pm-cal-add-hint { position: absolute; top: 5px; right: 6px; opacity: 0; transition: opacity .12s; color: var(--teal); }
-        .pm-cal-cell2:hover .pm-cal-add-hint { opacity: 1; }
-        .pm-cal-bars-overlay { position: absolute; left: 0; right: 0; top: 26px; display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
-        .pm-cal-bar { position: relative; height: 17px; pointer-events: auto; }
-        .pm-cal-bar-inner { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; font-size: 10px; color: #fff; font-weight: 600; overflow: hidden; white-space: nowrap; cursor: pointer; }
-        .pm-cal-subtask-dots { display: flex; gap: 2px; margin-top: 2px; flex-wrap: wrap; }
-        .pm-cal-subtask-dot { width: 6px; height: 6px; border-radius: 50%; background: #8B5CF6; cursor: pointer; }
-        .pm-cal-more { font-size: 9.5px; color: var(--muted); padding-left: 6px; margin-top: 1px; }
+        .cal-wrap { font-family:'Inter',sans-serif; }
+        .cal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+        .cal-month { font-family:'Merriweather',serif; font-size:18px; font-weight:700; color:var(--teal-deep,#0B4F6C); }
+        .cal-nav { display:flex; align-items:center; gap:8px; }
+        .cal-nav-btn { width:30px; height:30px; border-radius:8px; border:1px solid var(--border,#C5DFF0); background:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .cal-nav-btn:hover { background:var(--paper-deep,#EEF6FC); }
+        .cal-today-btn { border-radius:8px; border:1px solid var(--border,#C5DFF0); background:#fff; padding:0 12px; height:30px; font-size:12px; font-weight:600; color:var(--teal-deep,#0B4F6C); cursor:pointer; }
+        .cal-today-btn:hover { background:var(--paper-deep,#EEF6FC); }
+        .cal-grid { border:1px solid var(--border,#C5DFF0); border-radius:12px; overflow:hidden; background:#fff; }
+        .cal-daynames { display:grid; grid-template-columns:repeat(7,1fr); background:var(--paper-deep,#EEF6FC); border-bottom:1px solid var(--border,#C5DFF0); }
+        .cal-dayname { text-align:center; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted,#6B92AD); padding:9px 0; }
+        .cal-week { display:grid; grid-template-columns:repeat(7,1fr); border-bottom:1px solid var(--border,#C5DFF0); position:relative; }
+        .cal-week:last-child { border-bottom:none; }
+        .cal-cell { border-right:1px solid var(--border,#C5DFF0); padding:4px 5px 6px; min-height:120px; cursor:pointer; position:relative; background:#fff; transition:background .1s; box-sizing:border-box; }
+        .cal-cell:last-child { border-right:none; }
+        .cal-cell:hover { background:#F4FAFE; }
+        .cal-cell.empty { background:#FAFCFF; cursor:default; }
+        .cal-cell.today .cal-daynum { background:var(--teal,#1A7FA8); color:#fff; }
+        .cal-daynum { font-size:11.5px; font-weight:700; color:var(--muted,#6B92AD); width:22px; height:22px; display:flex; align-items:center; justify-content:center; border-radius:50%; margin-bottom:2px; }
+        .cal-plus { position:absolute; top:5px; right:5px; color:var(--teal,#1A7FA8); opacity:0; transition:opacity .12s; }
+        .cal-cell:hover .cal-plus { opacity:1; }
+        .cal-bars { position:absolute; left:0; right:0; top:28px; display:flex; flex-direction:column; gap:2px; pointer-events:none; padding:0 1px; }
+        .cal-bar-row { height:18px; position:relative; }
+        .cal-bar { position:absolute; top:0; bottom:0; display:flex; align-items:center; padding:0 6px; font-size:9.5px; color:#fff; font-weight:700; overflow:hidden; white-space:nowrap; cursor:pointer; pointer-events:auto; border-radius:4px; }
+        .cal-bar:hover { filter:brightness(1.1); }
+        .cal-subtasks { margin-top:2px; pointer-events:auto; position:relative; z-index:1; }
+        .cal-sub-item { font-size:9.5px; color:#7C3AED; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.4; cursor:pointer; display:flex; align-items:center; gap:2px; }
+        .cal-sub-item.done { text-decoration:line-through; color:#A78BFA; }
+        .cal-more-tasks { font-size:9px; color:var(--muted,#6B92AD); margin-top:1px; cursor:pointer; }
       `}</style>
 
-      <div className="pm-cal-head">
-        <div className="pm-cal-month">{monthLabel}</div>
-        <div className="pm-cal-nav">
-          <div className="pm-cal-navbtn" onClick={() => changeMonth(-1)}><ChevronLeft size={15} /></div>
-          <div className="pm-cal-navbtn" onClick={() => setCursor(startOfMonth(new Date()))} style={{ width: "auto", padding: "0 10px", fontSize: 11.5, fontWeight: 600, color: "var(--teal-deep)" }}>Today</div>
-          <div className="pm-cal-navbtn" onClick={() => changeMonth(1)}><ChevronRight size={15} /></div>
-        </div>
-      </div>
-
-      <div className="pm-cal-grid2">
-        <div className="pm-cal-weekday-row">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-            <div className="pm-cal-weekday2" key={d}>{d}</div>
-          ))}
+      <div className="cal-wrap">
+        <div className="cal-head">
+          <div className="cal-month">{monthLabel}</div>
+          <div className="cal-nav">
+            <button className="cal-nav-btn" onClick={() => changeMonth(-1)}><ChevronLeft size={15}/></button>
+            <button className="cal-today-btn" onClick={() => setCursor(startOfMonth(new Date()))}>Today</button>
+            <button className="cal-nav-btn" onClick={() => changeMonth(1)}><ChevronRight size={15}/></button>
+          </div>
         </div>
 
-        {weeks.map((week, wi) => {
-          const rows = weekBars[wi] || [];
-          const visibleRows = rows.slice(0, MAX_BARS_PER_WEEK);
-          const overflowCountByCol = {}; // col -> number of hidden bars touching that col
-          if (rows.length > MAX_BARS_PER_WEEK) {
-            for (const row of rows.slice(MAX_BARS_PER_WEEK)) {
-              for (const bar of row) {
-                for (let c = bar.startCol; c <= bar.endCol; c++) {
-                  overflowCountByCol[c] = (overflowCountByCol[c] || 0) + 1;
+        <div className="cal-grid">
+          <div className="cal-daynames">
+            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
+              <div className="cal-dayname" key={d}>{d}</div>
+            ))}
+          </div>
+
+          {weeks.map((week, wi) => {
+            const rows = weekBars[wi] || [];
+            const BAR_AREA = rows.length * (BAR_H + BAR_GAP);
+            const rowHeight = Math.max(120, CELL_TOP + BAR_AREA + 30);
+
+            // Overflow count per column
+            const maxRows = Math.min(rows.length, 3);
+            const overflowByCol = {};
+            if (rows.length > 3) {
+              for (const row of rows.slice(3)) {
+                for (const bar of row) {
+                  for (let c = bar.sc; c <= bar.ec; c++) {
+                    overflowByCol[c] = (overflowByCol[c] || 0) + 1;
+                  }
                 }
               }
             }
-          }
-          return (
-            <div className="pm-cal-week-row" key={wi} style={{ minHeight: 108 + visibleRows.length * 19 }}>
-              <div className="pm-cal-day-cells">
+
+            return (
+              <div className="cal-week" key={wi} style={{ minHeight: rowHeight }}>
                 {week.map((d, di) => {
-                  if (!d) return <div className="pm-cal-cell2 empty" key={di} />;
+                  if (!d) return <div className="cal-cell empty" key={di} style={{ minHeight: rowHeight }} />;
                   const key = toKey(d);
                   const isToday = key === todayKey;
-                  const subDots = subtasksByDay[key] || [];
-                  const hiddenHere = overflowCountByCol[di];
+                  const subs = subtasksByDay[key] || [];
+                  const overflow = overflowByCol[di] || 0;
+
                   return (
                     <div
-                      className={`pm-cal-cell2 ${isToday ? "today" : ""}`}
+                      className={`cal-cell${isToday ? " today" : ""}`}
                       key={di}
-                      style={{ minHeight: 108 + visibleRows.length * 19 }}
+                      style={{ minHeight: rowHeight }}
                       onClick={() => onCreateDate && onCreateDate(key)}
                     >
-                      <div className="pm-cal-daynum2">{d.getDate()}</div>
-                      <Plus size={12} className="pm-cal-add-hint" />
-                      {subDots.length > 0 && (
-                        <div style={{ marginTop:2 }}>
-                          {subDots.slice(0, 3).map((s) => (
+                      <div className="cal-daynum">{d.getDate()}</div>
+                      <Plus size={12} className="cal-plus" />
+
+                      {/* Subtask items shown below day number, above bars */}
+                      {subs.length > 0 && (
+                        <div className="cal-subtasks">
+                          {subs.slice(0,2).map(s => (
                             <div
                               key={s.id}
-                              style={{ display:"flex", alignItems:"center", gap:3, fontSize:9.5, color: s.is_done ? "#A78BFA" : "#7C3AED", fontWeight:600, padding:"1px 0", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", cursor:"pointer", textDecoration: s.is_done ? "line-through" : "none" }}
-                              title={`${s.title} (${s.parentTitle})`}
-                              onClick={(e) => { e.stopPropagation(); onSelect && onSelect({ id: s.parentId }); }}
+                              className={`cal-sub-item${s.is_done?" done":""}`}
+                              title={s.title}
+                              onClick={e => { e.stopPropagation(); onSelect && onSelect({ id: s.parentId }); }}
                             >
-                              <span style={{ width:5, height:5, borderRadius:"50%", background: s.is_done ? "#A78BFA" : "#7C3AED", flexShrink:0 }} />
-                              {s._date.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })}_{s.title}
+                              <span style={{ width:5, height:5, borderRadius:"50%", background: s.is_done?"#A78BFA":"#7C3AED", flexShrink:0 }} />
+                              {s._date.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}_{s.title}
                             </div>
                           ))}
-                          {subDots.length > 3 && (
-                            <div style={{ fontSize:9, color:"var(--muted)", paddingLeft:8 }}>+{subDots.length - 3} more</div>
-                          )}
+                          {subs.length > 2 && <div className="cal-more-tasks">+{subs.length-2} subtasks</div>}
                         </div>
                       )}
-                      {hiddenHere > 0 && <div className="pm-cal-more">+{hiddenHere} more</div>}
+
+                      {overflow > 0 && (
+                        <div className="cal-more-tasks">+{overflow} more events</div>
+                      )}
                     </div>
                   );
                 })}
-              </div>
 
-              {/* Spanning event bars overlaid across the week's columns */}
-              <div className="pm-cal-bars-overlay">
-                {visibleRows.map((row, ri) => (
-                  <div key={ri} style={{ position: "relative", height: 17 }}>
-                    {row.map((bar) => {
-                      const widthPct = ((bar.endCol - bar.startCol + 1) / 7) * 100;
-                      const leftPct = (bar.startCol / 7) * 100;
-                      return (
-                        <div
-                          key={bar.task.id}
-                          className="pm-cal-bar-inner"
-                          style={{
-                            left: `calc(${leftPct}% + 3px)`,
-                            width: `calc(${widthPct}% - 6px)`,
-                            background: STATUS_COLOR[bar.task.status],
-                            borderRadius: `${bar.continuesLeft ? 0 : 5}px ${bar.continuesRight ? 0 : 5}px ${bar.continuesRight ? 0 : 5}px ${bar.continuesLeft ? 0 : 5}px`,
-                          }}
-                          title={bar.task.title}
-                          onClick={(e) => { e.stopPropagation(); onSelect(bar.task); }}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: PRIORITY_COLOR[bar.task.priority], flexShrink: 0, marginRight: 4 }} />
-                          {bar.task.title}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                {/* Event bars rendered as absolute overlay per week row */}
+                <div className="cal-bars" style={{ top: CELL_TOP + 24 }}>
+                  {rows.slice(0, 3).map((row, ri) => (
+                    <div className="cal-bar-row" key={ri}>
+                      {row.map(bar => {
+                        const totalCols = 7;
+                        const leftPct = (bar.sc / totalCols) * 100;
+                        const widthPct = ((bar.ec - bar.sc + 1) / totalCols) * 100;
+                        return (
+                          <div
+                            key={bar.task.id}
+                            className="cal-bar"
+                            style={{
+                              left: `calc(${leftPct}% + 2px)`,
+                              width: `calc(${widthPct}% - 4px)`,
+                              background: STATUS_COLOR[bar.task.status] || "#6B92AD",
+                              borderRadius: `${bar.left?0:4}px ${bar.right?0:4}px ${bar.right?0:4}px ${bar.left?0:4}px`,
+                            }}
+                            title={bar.task.title}
+                            onClick={e => { e.stopPropagation(); onSelect(bar.task); }}
+                          >
+                            {bar.task.title}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

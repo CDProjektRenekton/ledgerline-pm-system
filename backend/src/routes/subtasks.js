@@ -34,7 +34,7 @@ router.post("/", async (req, res) => {
   const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:created", result.rows[0]);
-    await logHistory(taskId, req.user.id, "subtask_added", `Subtask "${title.trim()}" added${targetAt ? ` (target: ${new Date(targetAt).toLocaleString()})` : ""}`);
+    await logHistory(taskId, req.user.id, "subtask_added", `${req.user.name} added subtask "${title.trim()}"${targetAt ? ` (target: ${new Date(targetAt).toLocaleString()})` : ""}`);
   }
   res.status(201).json(result.rows[0]);
 });
@@ -62,16 +62,13 @@ router.patch("/:id", async (req, res) => {
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:updated", result.rows[0]);
     if (is_done !== undefined && is_done !== sub.is_done) {
-      const dt = result.rows[0].target_at
-        ? new Date(result.rows[0].target_at).toLocaleString()
-        : new Date().toLocaleString();
       await logHistory(
         sub.task_id,
         req.user.id,
         "subtask_toggled",
         is_done
-          ? `Subtask "${result.rows[0].title}" completed at ${dt}`
-          : `Subtask "${result.rows[0].title}" marked not done`
+          ? `${req.user.name} completed subtask "${result.rows[0].title}"${result.rows[0].target_at ? ` at ${new Date(result.rows[0].target_at).toLocaleString()}` : ""}`
+          : `${req.user.name} marked subtask "${result.rows[0].title}" as not done`
       );
     }
   }

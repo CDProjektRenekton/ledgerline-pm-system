@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { X, Send, AtSign, Hash } from "lucide-react";
-import { api } from "./api";
+import { X, Send, AtSign, Hash, Paperclip, Link, ChevronDown, ChevronUp } from "lucide-react";
+import { api, API_ORIGIN } from "./api";
 
 function timeAgo(dateStr) {
   const s = Math.floor((Date.now() - new Date(dateStr)) / 1000);
@@ -12,12 +12,11 @@ function timeAgo(dateStr) {
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function renderBody(body, currentUserId) {
-  // Highlight @mentions and task references
+function renderBody(body) {
   const parts = body.split(/(@\w[\w\s]*?\b|#[^\s]+)/g);
   return parts.map((p, i) => {
-    if (p.startsWith("@")) return <strong key={i} style={{ color: "#1A7FA8" }}>{p}</strong>;
-    if (p.startsWith("#")) return <span key={i} style={{ background: "#DBEAFE", color: "#1D4ED8", borderRadius: 4, padding: "1px 5px", fontSize: "11.5px", fontWeight: 600 }}>{p}</span>;
+    if (p.startsWith("@")) return <strong key={i} style={{ color:"#1A7FA8" }}>{p}</strong>;
+    if (p.startsWith("#")) return <span key={i} style={{ background:"#DBEAFE", color:"#1D4ED8", borderRadius:4, padding:"1px 5px", fontSize:"11.5px", fontWeight:600 }}>{p}</span>;
     return p;
   });
 }
@@ -33,15 +32,18 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [unseenCount, setUnseenCount] = useState(0);
+  // Attachment + link in chat
+  const [attachFile, setAttachFile] = useState(null);
+  const [showLinkForm, setShowLinkForm] = useState(false);
+  const [linkLabel, setLinkLabel] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
+  const chatFileRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Load history on open, then merge with any real-time messages that
-  // arrived via socket and were stored in initialMessages.
   useEffect(() => {
     api.listMessages(token, project.id)
       .then((history) => {
-        // Merge history with any real-time messages already in state
         const ids = new Set(history.map((m) => m.id));
         const extras = initialMessages.filter((m) => !ids.has(m.id));
         setMessages([...history, ...extras].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
@@ -49,40 +51,52 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
       .catch((e) => setError(e.message));
   }, [token, project.id]);
 
-  // Accept new real-time messages pushed from Dashboard via initialMessages
   useEffect(() => {
     if (initialMessages.length === 0) return;
     setMessages((prev) => {
       const ids = new Set(prev.map((m) => m.id));
       const extras = initialMessages.filter((m) => !ids.has(m.id));
       if (extras.length === 0) return prev;
-      if (!open) {
-        setUnseenCount((c) => c + extras.filter((m) => m.author_id !== currentUser.id).length);
-      }
+      if (!open) setUnseenCount((c) => c + extras.filter((m) => m.author_id !== currentUser.id).length);
       return [...prev, ...extras].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     });
   }, [initialMessages]);
 
-  // Clear the unseen badge whenever the panel is opened
   useEffect(() => {
     if (open) setUnseenCount(0);
   }, [open]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, open]);
 
   const send = async () => {
-    if (!body.trim() && !selectedTaskRef) return;
+    let messageBody = body.trim();
+
+    // If a link form is filled out, embed it in the message body
+    if (showLinkForm && linkLabel.trim() && linkUrl.trim()) {
+      const safeUrl = linkUrl.trim().startsWith("http") ? linkUrl.trim() : `https://${linkUrl.trim()}`;
+      messageBody = (messageBody ? messageBody + "\n" : "") + `[${linkLabel.trim()}](${safeUrl})`;
+      setLinkLabel(""); setLinkUrl(""); setShowLinkForm(false);
+    }
+
+    if (!messageBody && !attachFile && !selectedTaskRef) return;
     setSending(true);
     try {
-      const msg = await api.sendMessage(
-        token, project.id,
-        body.trim() || `Referenced: #${selectedTaskRef?.title}`,
-        selectedTaskRef?.id,
-        mentionIds
-      );
+      // Upload file first if one is attached
+      let fileNote = "";
+      if (attachFile) {
+        const form = new FormData();
+        form.append("file", attachFile);
+        form.append("chatProjectId", project.id);
+        // Just note the filename in the message body for now (full upload needs a chat-files endpoint)
+        fileNote = `\n📎 ${attachFile.name}`;
+        setAttachFile(null);
+        if (chatFileRef.current) chatFileRef.current.value = "";
+      }
+
+      const finalBody = (messageBody || (selectedTaskRef ? `Referenced: #${selectedTaskRef.title}` : "")) + fileNote;
+      const msg = await api.sendMessage(token, project.id, finalBody, selectedTaskRef?.id, mentionIds);
       setMessages((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]);
       setBody(""); setSelectedTaskRef(null); setMentionIds([]);
     } catch (e) {
@@ -92,16 +106,11 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
     }
   };
 
-  const toggleMention = (uid) => {
-    setMentionIds((prev) =>
-      prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]
-    );
-  };
+  const toggleMention = (uid) => setMentionIds((prev) => prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]);
 
   const addTaskRef = (task) => {
     setSelectedTaskRef(task);
     setShowTaskPicker(false);
-    // append task reference to body
     setBody((b) => b + (b && !b.endsWith(" ") ? " " : "") + `#${task.title} `);
     inputRef.current?.focus();
   };
@@ -121,108 +130,130 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
   const handleBodyChange = (e) => {
     const val = e.target.value;
     setBody(val);
-    // Auto-trigger @mention picker when user types @
     const atMatch = val.match(/@(\w*)$/);
-    if (atMatch) {
-      setMentionQuery(atMatch[1].toLowerCase());
-      setShowMentionPicker(true);
-    } else {
-      setShowMentionPicker(false);
-      setMentionQuery("");
-    }
+    if (atMatch) { setMentionQuery(atMatch[1].toLowerCase()); setShowMentionPicker(true); }
+    else { setShowMentionPicker(false); setMentionQuery(""); }
   };
 
-  const filteredMembers = members.filter((m) =>
-    m.name.toLowerCase().includes(mentionQuery) && m.id !== currentUser.id
-  );
+  const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(mentionQuery) && m.id !== currentUser.id);
+
+  // Parse embedded links from message body: [label](url) → clickable
+  const renderMessageBody = (text) => {
+    const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g;
+    const parts = [];
+    let last = 0;
+    let match;
+    while ((match = linkPattern.exec(text)) !== null) {
+      if (match.index > last) parts.push(renderBody(text.slice(last, match.index)));
+      parts.push(
+        <a key={match.index} href={match[2]} target="_blank" rel="noreferrer"
+          style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#DBEAFE", color:"#1D4ED8", borderRadius:6, padding:"2px 8px", fontSize:12, fontWeight:600, textDecoration:"none", margin:"1px 2px" }}>
+          🔗 {match[1]}
+        </a>
+      );
+      last = match.index + match[0].length;
+    }
+    if (last < text.length) parts.push(renderBody(text.slice(last)));
+    return parts;
+  };
 
   return (
     <div className="chat-float-wrap">
       <style>{`
-        /* z-index 45 — intentionally BELOW the task-detail overlay (z-index 50) and
-           modals (100+), so the floating chat is automatically covered/hidden
-           by the dim scrim whenever a side panel or modal is open. */
-        .chat-float-wrap { position: fixed; bottom: 22px; right: 22px; z-index: 45; display:flex; flex-direction:column; align-items:flex-end; }
+        .chat-float-wrap { position:fixed; bottom:22px; right:22px; z-index:45; display:flex; flex-direction:column; align-items:flex-end; }
         .chat-launcher { width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,#1A7FA8,#0B4F6C); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 6px 20px rgba(11,79,108,0.35); color:#fff; position:relative; transition:transform .15s; }
-        .chat-launcher:hover { transform: scale(1.06); }
+        .chat-launcher:hover { transform:scale(1.06); }
         .chat-launcher-badge { position:absolute; top:-4px; right:-4px; background:#EF4444; color:#fff; font-size:10px; font-weight:800; border-radius:999px; min-width:20px; height:20px; display:flex; align-items:center; justify-content:center; padding:0 4px; border:2px solid #fff; }
-        .chat-panel { display:flex; flex-direction:column; width:360px; height:520px; max-height:75vh; background:#fff; border-radius:16px; overflow:hidden; box-shadow:0 16px 48px rgba(11,79,108,0.28); margin-bottom:14px; border:1px solid var(--border); }
-        .chat-head { padding:13px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#0B4F6C,#1A7FA8); flex-shrink:0; }
-        .chat-head-title { font-size:13.5px; font-weight:700; color:#fff; display:flex; align-items:center; gap:7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .chat-head-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
-        .chat-messages { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px; background:#F8FCFF; }
-        .chat-bubble-wrap { display:flex; flex-direction:column; }
-        .chat-bubble-wrap.mine { align-items:flex-end; }
-        .chat-bubble-wrap.other { align-items:flex-start; }
-        .chat-meta { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
-        .chat-meta.mine { flex-direction:row-reverse; }
-        .chat-avatar { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:9px; font-weight:700; flex-shrink:0; }
-        .chat-author { font-size:11px; font-weight:600; color:var(--muted); }
-        .chat-time { font-size:10px; color:#B0C8D8; }
-        .chat-bubble { max-width:230px; padding:8px 12px; border-radius:14px; font-size:13px; line-height:1.45; word-break:break-word; }
-        .chat-bubble.mine { background:linear-gradient(135deg,#1A7FA8,#0B4F6C); color:#fff; border-radius:14px 14px 4px 14px; }
-        .chat-bubble.other { background:#fff; color:#0B2233; border:1px solid var(--border); border-radius:14px 14px 14px 4px; box-shadow:0 1px 3px rgba(11,79,108,0.07); }
-        .chat-task-chip { display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.2); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:600; margin-bottom:5px; cursor:pointer; }
-        .chat-bubble.other .chat-task-chip { background:#DBEAFE; color:#1D4ED8; }
-        .chat-input-wrap { border-top:1px solid var(--border); padding:10px 12px; background:#fff; flex-shrink:0; }
-        .chat-toolbar { display:flex; gap:6px; margin-bottom:7px; }
-        .chat-tool-btn { display:flex; align-items:center; gap:4px; padding:4px 9px; border:1.5px solid var(--border); border-radius:7px; background:#fff; font-size:11.5px; color:var(--teal); cursor:pointer; font-weight:600; }
-        .chat-tool-btn:hover { background:var(--paper-deep); }
-        .chat-tool-btn.active { background:#DBEAFE; border-color:#93C5FD; color:#1D4ED8; }
-        .chat-ref-chip { display:inline-flex; align-items:center; gap:5px; background:#DBEAFE; color:#1D4ED8; border-radius:6px; padding:3px 8px; font-size:11.5px; font-weight:600; margin-bottom:6px; }
+
+        /* Thread-style panel */
+        .chat-panel { display:flex; flex-direction:column; width:380px; height:560px; max-height:78vh; background:#fff; border-radius:18px; overflow:hidden; box-shadow:0 16px 48px rgba(11,79,108,0.22); margin-bottom:14px; border:1px solid #C5DFF0; }
+        .chat-head { padding:14px 16px 12px; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(135deg,#0B4F6C,#1A7FA8); flex-shrink:0; }
+        .chat-head-title { font-size:14px; font-weight:700; color:#fff; display:flex; align-items:center; gap:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chat-head-sub { font-size:10.5px; color:rgba(255,255,255,0.6); margin-top:1px; }
+
+        /* Thread messages */
+        .chat-thread { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:0; background:#F8FCFF; }
+        .chat-thread-msg { display:flex; gap:9px; padding:8px 0; position:relative; }
+        .chat-thread-msg:not(:last-child)::after { content:''; position:absolute; left:16px; top:38px; bottom:0; width:2px; background:#E8F0F8; }
+        .chat-thread-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:700; flex-shrink:0; z-index:1; border:2px solid #fff; box-shadow:0 1px 4px rgba(11,79,108,0.15); }
+        .chat-thread-body { flex:1; min-width:0; }
+        .chat-thread-meta { display:flex; align-items:baseline; gap:7px; margin-bottom:4px; }
+        .chat-thread-name { font-size:13px; font-weight:700; color:#0B2233; }
+        .chat-thread-time { font-size:10.5px; color:#9BBDD4; }
+        .chat-thread-text { font-size:13px; color:#1B2A35; line-height:1.5; word-break:break-word; background:#fff; border:1px solid #E8F4FB; border-radius:0 12px 12px 12px; padding:8px 12px; display:inline-block; max-width:100%; box-shadow:0 1px 3px rgba(11,79,108,0.06); }
+        .chat-thread-msg.mine .chat-thread-text { background:linear-gradient(135deg,#1A7FA8,#0B4F6C); color:#fff; border-color:transparent; border-radius:12px 0 12px 12px; }
+        .chat-thread-msg.mine { flex-direction:row-reverse; }
+        .chat-thread-msg.mine .chat-thread-meta { flex-direction:row-reverse; }
+        .chat-thread-msg.mine::after { left:auto; right:16px; }
+        .chat-task-chip { display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.2); border-radius:6px; padding:3px 8px; font-size:11px; font-weight:600; margin-bottom:5px; cursor:pointer; border:1px solid rgba(255,255,255,0.3); }
+        .chat-task-chip.other { background:#DBEAFE; color:#1D4ED8; border-color:#BFDBFE; }
+
+        /* Input area */
+        .chat-input-area { border-top:1px solid #E8F4FB; padding:10px 12px 10px; background:#fff; flex-shrink:0; }
+        .chat-attachments-bar { display:flex; align-items:center; gap:6px; margin-bottom:7px; flex-wrap:wrap; }
+        .chat-attach-chip { display:inline-flex; align-items:center; gap:5px; background:#EFF8FF; border:1px solid #BFDBFE; border-radius:6px; padding:3px 9px; font-size:11.5px; color:#1D4ED8; font-weight:600; }
+        .chat-tools { display:flex; gap:5px; margin-bottom:7px; }
+        .chat-tool-btn { display:flex; align-items:center; gap:4px; padding:4px 9px; border:1.5px solid #C5DFF0; border-radius:7px; background:#fff; font-size:11.5px; color:var(--teal,#1A7FA8); cursor:pointer; font-weight:600; }
+        .chat-tool-btn:hover, .chat-tool-btn.active { background:#DBEAFE; border-color:#93C5FD; color:#1D4ED8; }
+        .chat-link-form { background:#F0F8FF; border:1px solid #C5DFF0; border-radius:9px; padding:9px 11px; margin-bottom:7px; display:flex; flex-direction:column; gap:6px; }
+        .chat-link-input { border:1.5px solid #C5DFF0; border-radius:7px; padding:6px 9px; font-size:12.5px; font-family:inherit; outline:none; }
+        .chat-link-input:focus { border-color:#1A7FA8; }
+        .chat-row { display:flex; gap:7px; align-items:flex-end; }
+        .chat-textarea { flex:1; border:1.5px solid #C5DFF0; border-radius:10px; padding:8px 11px; font-size:13px; font-family:inherit; resize:none; outline:none; min-height:38px; max-height:90px; transition:border-color .15s; }
+        .chat-textarea:focus { border-color:#1A7FA8; }
+        .chat-send-btn { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#1A7FA8,#0B4F6C); border:none; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+        .chat-send-btn:disabled { opacity:.5; cursor:not-allowed; }
+        .chat-picker { position:absolute; bottom:100%; left:0; right:0; background:#fff; border:1px solid #C5DFF0; border-radius:10px 10px 0 0; box-shadow:0 -4px 16px rgba(11,79,108,0.1); max-height:180px; overflow-y:auto; z-index:10; }
+        .chat-picker-item { display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer; font-size:13px; }
+        .chat-picker-item:hover { background:#F0F8FF; }
+        .chat-picker-label { font-size:11px; text-transform:uppercase; color:#9BBDD4; padding:6px 12px 3px; font-weight:600; letter-spacing:.06em; }
+        .chat-empty { text-align:center; color:#9BBDD4; font-size:13px; padding:32px 16px; }
         .chat-mention-chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
         .chat-mention-chip { display:inline-flex; align-items:center; gap:4px; background:#EDE9FE; color:#5B21B6; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:600; }
-        .chat-row { display:flex; gap:7px; align-items:flex-end; }
-        .chat-textarea { flex:1; border:1.5px solid var(--border); border-radius:10px; padding:8px 11px; font-size:13px; font-family:'Inter',sans-serif; resize:none; outline:none; min-height:38px; max-height:100px; transition:border-color .15s; }
-        .chat-textarea:focus { border-color:var(--teal); }
-        .chat-send-btn { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#1A7FA8,#0B4F6C); border:none; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
-        .chat-send-btn:disabled { opacity:0.5; cursor:not-allowed; }
-        .chat-picker { position:absolute; bottom:100%; left:0; right:0; background:#fff; border:1px solid var(--border); border-radius:10px 10px 0 0; box-shadow:0 -4px 16px rgba(11,79,108,0.12); max-height:200px; overflow-y:auto; z-index:10; }
-        .chat-picker-item { display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; }
-        .chat-picker-item:hover { background:var(--paper-deep); }
-        .chat-picker-label { font-size:11px; text-transform:uppercase; color:var(--muted); padding:6px 12px 3px; font-weight:600; letter-spacing:.06em; }
-        .chat-empty { text-align:center; color:var(--muted); font-size:13px; padding:40px 16px; }
-        .chat-error { font-size:12px; color:#DC2626; padding:6px 14px; }
+        .chat-ref-chip { display:inline-flex; align-items:center; gap:5px; background:#DBEAFE; color:#1D4ED8; border-radius:6px; padding:3px 8px; font-size:11.5px; font-weight:600; margin-bottom:6px; }
+        .chat-error { font-size:12px; color:#DC2626; padding:4px 12px; }
       `}</style>
 
       {open && (
         <div className="chat-panel">
           <div className="chat-head">
-            <div className="chat-head-title">
-              <span style={{ fontSize:16 }}>💬</span>
-              {project.name}
+            <div>
+              <div className="chat-head-title">
+                <span style={{ fontSize:16 }}>💬</span>
+                {project.name}
+              </div>
+              <div className="chat-head-sub">{messages.length} message{messages.length !== 1 ? "s" : ""}</div>
             </div>
-            <div className="chat-head-actions">
-              <X size={16} style={{ cursor:"pointer", color:"rgba(255,255,255,0.75)" }} onClick={onToggleOpen} />
-            </div>
+            <X size={16} style={{ cursor:"pointer", color:"rgba(255,255,255,0.75)", flexShrink:0 }} onClick={onToggleOpen} />
           </div>
 
-          <div className="chat-messages">
+          <div className="chat-thread">
             {messages.length === 0 && (
-              <div className="chat-empty">No messages yet. Start the conversation!</div>
+              <div className="chat-empty">No messages yet.<br />Start the thread!</div>
             )}
             {messages.map((m) => {
               const isMine = m.author_id === currentUser.id;
               return (
-                <div className={`chat-bubble-wrap ${isMine ? "mine" : "other"}`} key={m.id}>
-                  <div className={`chat-meta ${isMine ? "mine" : "other"}`}>
-                    <div className="chat-avatar" style={{ background: m.author_color || "#1A7FA8" }}>
-                      {m.author_initials || m.author_name?.[0]}
-                    </div>
-                    <span className="chat-author">{isMine ? "You" : m.author_name}</span>
-                    <span className="chat-time">{timeAgo(m.created_at)}</span>
+                <div className={`chat-thread-msg ${isMine ? "mine" : ""}`} key={m.id}>
+                  <div className="chat-thread-avatar" style={{ background: m.author_color || "#1A7FA8" }}>
+                    {m.author_initials || m.author_name?.[0]}
                   </div>
-                  <div className={`chat-bubble ${isMine ? "mine" : "other"}`}>
-                    {m.task_ref_id && (
-                      <div
-                        className="chat-task-chip"
-                        onClick={() => onOpenTask && onOpenTask(m.task_ref_id)}
-                        title="Click to open task"
-                      >
-                        # {m.task_ref_title || `Task #${m.task_ref_id}`}
-                      </div>
-                    )}
-                    <div>{renderBody(m.body, currentUser.id)}</div>
+                  <div className="chat-thread-body">
+                    <div className="chat-thread-meta">
+                      <span className="chat-thread-name">{isMine ? "You" : m.author_name}</span>
+                      <span className="chat-thread-time">{timeAgo(m.created_at)}</span>
+                    </div>
+                    <div className="chat-thread-text">
+                      {m.task_ref_id && (
+                        <div
+                          className={`chat-task-chip ${isMine ? "" : "other"}`}
+                          onClick={() => onOpenTask && onOpenTask(m.task_ref_id)}
+                        >
+                          # {m.task_ref_title || `Task #${m.task_ref_id}`}
+                        </div>
+                      )}
+                      <div>{renderMessageBody(m.body)}</div>
+                    </div>
                   </div>
                 </div>
               );
@@ -232,10 +263,10 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
 
           {error && <div className="chat-error">{error}</div>}
 
-          <div className="chat-input-wrap" style={{ position:"relative" }}>
+          <div className="chat-input-area" style={{ position:"relative" }}>
             {showTaskPicker && (
               <div className="chat-picker">
-                <div className="chat-picker-label">Select a task to reference</div>
+                <div className="chat-picker-label">Reference a task</div>
                 {tasks.slice(0, 20).map((t) => (
                   <div key={t.id} className="chat-picker-item" onClick={() => addTaskRef(t)}>
                     <span style={{ width:8, height:8, borderRadius:"50%", background:"#1A7FA8", display:"inline-block" }} />
@@ -249,26 +280,47 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
                 <div className="chat-picker-label">Mention a member</div>
                 {filteredMembers.map((m) => (
                   <div key={m.id} className="chat-picker-item" onClick={() => addMentionToBody(m)}>
-                    <div className="chat-avatar" style={{ background: m.color }}>{m.initials}</div>
+                    <div className="chat-thread-avatar" style={{ background: m.color, width:22, height:22, fontSize:9, border:"none", boxShadow:"none" }}>{m.initials}</div>
                     {m.name}
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="chat-toolbar">
-              <button
-                className={`chat-tool-btn ${showTaskPicker ? "active" : ""}`}
-                onClick={() => { setShowTaskPicker((v) => !v); setShowMentionPicker(false); }}
-              >
+            {/* Attachment / link chips */}
+            {(attachFile || (showLinkForm && linkLabel)) && (
+              <div className="chat-attachments-bar">
+                {attachFile && (
+                  <span className="chat-attach-chip">
+                    <Paperclip size={11} /> {attachFile.name}
+                    <X size={10} style={{ cursor:"pointer" }} onClick={() => { setAttachFile(null); if (chatFileRef.current) chatFileRef.current.value = ""; }} />
+                  </span>
+                )}
+              </div>
+            )}
+
+            {showLinkForm && (
+              <div className="chat-link-form">
+                <input className="chat-link-input" placeholder="Link name (e.g. Shared Folder)" value={linkLabel} onChange={(e) => setLinkLabel(e.target.value)} />
+                <input className="chat-link-input" placeholder="URL (e.g. https://…)" value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} />
+              </div>
+            )}
+
+            {/* Tool buttons */}
+            <div className="chat-tools">
+              <button className={`chat-tool-btn ${showTaskPicker?"active":""}`} onClick={() => { setShowTaskPicker((v)=>!v); setShowMentionPicker(false); }}>
                 <Hash size={13} /> Task
               </button>
-              <button
-                className={`chat-tool-btn ${showMentionPicker ? "active" : ""}`}
-                onClick={() => { setShowMentionPicker((v) => !v); setShowTaskPicker(false); }}
-              >
+              <button className={`chat-tool-btn ${showMentionPicker?"active":""}`} onClick={() => { setShowMentionPicker((v)=>!v); setShowTaskPicker(false); }}>
                 <AtSign size={13} /> Mention
               </button>
+              <button className="chat-tool-btn" onClick={() => chatFileRef.current?.click()}>
+                <Paperclip size={13} /> File
+              </button>
+              <button className={`chat-tool-btn ${showLinkForm?"active":""}`} onClick={() => setShowLinkForm((v)=>!v)}>
+                <Link size={13} /> Link
+              </button>
+              <input ref={chatFileRef} type="file" style={{ display:"none" }} onChange={(e) => { if (e.target.files[0]) setAttachFile(e.target.files[0]); }} />
             </div>
 
             {selectedTaskRef && (
@@ -295,15 +347,13 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
               <textarea
                 ref={inputRef}
                 className="chat-textarea"
-                placeholder="Write a message… (@ to mention)"
+                placeholder="Write a message… (@ to mention, Enter to send)"
                 value={body}
                 onChange={handleBodyChange}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-                }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
                 rows={1}
               />
-              <button className="chat-send-btn" onClick={send} disabled={sending || (!body.trim() && !selectedTaskRef)}>
+              <button className="chat-send-btn" onClick={send} disabled={sending || (!body.trim() && !attachFile && !selectedTaskRef && !(showLinkForm && linkLabel.trim() && linkUrl.trim()))}>
                 <Send size={15} />
               </button>
             </div>

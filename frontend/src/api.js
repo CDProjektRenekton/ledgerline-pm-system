@@ -67,7 +67,10 @@ export const api = {
   reorderTasks: (token, projectId, status, orderedIds) =>
     request("/tasks/reorder", { method: "POST", body: { projectId, status, orderedIds }, token }),
 
-  listSubtasks: (token, taskId) => request(`/subtasks?taskId=${taskId}`, { token }),
+  listLinks: (token, taskId) => request(`/links?taskId=${taskId}`, { token }),
+  addLink: (token, taskId, label, url) =>
+    request("/links", { method: "POST", body: { taskId, label, url }, token }),
+  deleteLink: (token, id) => request(`/links/${id}`, { method: "DELETE", token }),
   createSubtask: (token, taskId, title, targetAt) =>
     request("/subtasks", { method: "POST", body: { taskId, title, targetAt }, token }),
   updateSubtask: (token, id, patch) =>
