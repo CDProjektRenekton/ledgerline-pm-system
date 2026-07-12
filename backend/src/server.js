@@ -4,6 +4,21 @@ const cors = require("cors");
 const http = require("http");
 const path = require("path");
 
+// --- Global crash-safety net ---
+// Express 4 does NOT forward errors thrown inside async route handlers to the
+// error-handling middleware automatically. Without this, any unexpected DB
+// error (a missing table, a bad constraint, a network blip) becomes an
+// unhandled promise rejection that takes down the ENTIRE server process —
+// which then drops every open connection (all API calls fail with "Failed to
+// fetch" and every socket disconnects). These handlers log the error and keep
+// the server alive so a single failed request never affects anyone else.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection (server stays up):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (server stays up):", err);
+});
+
 const authRoutes = require("./routes/auth");
 const projectRoutes = require("./routes/projects");
 const taskRoutes = require("./routes/tasks");

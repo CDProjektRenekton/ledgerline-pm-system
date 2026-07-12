@@ -310,6 +310,19 @@ router.get("/:id/report", async (req, res) => {
   });
 });
 
+// Leave a project (non-owners only)
+router.post("/:id/leave", async (req, res) => {
+  const { id } = req.params;
+  const membership = await db.query(
+    "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+    [id, req.user.id]
+  );
+  if (membership.rows.length === 0) return res.status(404).json({ error: "You are not a member of this project" });
+  if (membership.rows[0].role === "owner") return res.status(400).json({ error: "The project owner cannot leave. Transfer ownership or delete the project." });
+  await db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [id, req.user.id]);
+  res.json({ ok: true });
+});
+
 // Permanently delete — owner only
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;

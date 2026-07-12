@@ -105,6 +105,7 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
   const [newTaskSubtasks, setNewTaskSubtasks] = useState([]); // { title, targetAt }
   const [newTaskSubInput, setNewTaskSubInput] = useState("");
+  const [newTaskSubTargetAt, setNewTaskSubTargetAt] = useState("");
   // Card quick-action popover
   const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
   const [popoverComment, setPopoverComment] = useState("");
@@ -132,6 +133,14 @@ export default function Dashboard({ token, user, onLogout }) {
   const [showReport, setShowReport] = useState(false);
   const [reportData, setReportData] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
+  // Profile modal
+  const [showProfile, setShowProfile] = useState(false);
+  const [profileTab, setProfileTab] = useState("avatar"); // avatar | password | deactivate
+  const [profileCurrentPw, setProfileCurrentPw] = useState("");
+  const [profileNewPw, setProfileNewPw] = useState("");
+  const [profileMsg, setProfileMsg] = useState({ type:"", text:"" });
+  const [avatarPreview, setAvatarPreview] = useState(null);
+  const profileFileRef = useRef(null);
   // Status-change confirmation
   const [pendingStatusChange, setPendingStatusChange] = useState(null); // { taskId, status, title }
   // Chat floating widget
@@ -150,9 +159,26 @@ export default function Dashboard({ token, user, onLogout }) {
   // Real-time connection: join the active project's room (+ this user's
   // personal room) and react to task/comment/notification events.
   useEffect(() => {
-    const socket = io(API_ORIGIN, { transports: ["websocket", "polling"] });
+    const socket = io(API_ORIGIN, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
     socketRef.current = socket;
-    socket.on("connect", () => socket.emit("join-user", user.id));
+    socket.on("connect", () => {
+      socket.emit("join-user", user.id);
+      if (activeProject) socket.emit("join-project", activeProject.id);
+    });
+    socket.on("reconnect", () => {
+      // Re-join rooms and refresh stale data after reconnect
+      socket.emit("join-user", user.id);
+      if (activeProject) socket.emit("join-project", activeProject.id);
+      refreshTasks().catch(() => {});
+      api.listPendingInvites(token).then(setPendingInvites).catch(() => {});
+    });
 
     socket.on("task:created", (task) => {
       setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [...prev, { ...task, labels: [] }]));
@@ -187,12 +213,15 @@ export default function Dashboard({ token, user, onLogout }) {
       });
     });
     socket.on("subtask:created", (s) => {
-      // Update panel subtask list only if this task is currently open
+      // Update panel subtask list if this task is currently open in the side panel
       setSubtasks((prev) => {
-        if (!prev.find((x) => x.task_id === s.task_id)) return prev; // panel shows different task
+        const isCorrectTask = prev.length === 0 ? false : prev.some((x) => x.task_id === s.task_id);
+        // We also update if selectedTask matches — but we can't read selectedTask here safely,
+        // so we rely on the dedup guard and let addSubtask handle the optimistic update.
+        if (!isCorrectTask && prev.length > 0) return prev; // panel shows different task
         return prev.some((x) => x.id === s.id) ? prev : [...prev, s];
       });
-      // Always update the bundled subtasks on the task card for cross-view plotting
+      // Always update bundled subtasks on the task card
       setTasks((prev) => prev.map((t) =>
         t.id === s.task_id
           ? { ...t, subtasks: (t.subtasks || []).some((x) => x.id === s.id) ? t.subtasks : [...(t.subtasks || []), s] }
@@ -290,7 +319,22 @@ export default function Dashboard({ token, user, onLogout }) {
     } catch (_) {}
   };
 
-  // Load pending project invitations on mount
+  // Polling fallback — refresh notification counts and pending invites every 30s
+  // in case socket events are missed (network blips, server restarts, etc.)
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      try {
+        const [counts, invites] = await Promise.all([
+          api.notificationCounts(token),
+          api.listPendingInvites(token),
+        ]);
+        setTaskUnreadCounts(counts.byTask || {});
+        setProjectUnreadCounts(counts.byProject || {});
+        setPendingInvites(invites);
+      } catch (_) {}
+    }, 30000);
+    return () => clearInterval(poll);
+  }, [token]);
   useEffect(() => {
     api.listPendingInvites(token).then(setPendingInvites).catch(() => {});
   }, [token]);
@@ -338,6 +382,31 @@ export default function Dashboard({ token, user, onLogout }) {
       setReportData(data);
     } catch (err) { setError(err.message); }
     finally { setReportLoading(false); }
+  };
+
+  const exportCurrentViewAsPDF = () => {
+    // Use the browser's print API with a print-only stylesheet
+    const printStyle = document.createElement("style");
+    printStyle.id = "pm-pdf-style";
+    printStyle.textContent = `
+      @media print {
+        body > * { display: none !important; }
+        #pm-pdf-target, #pm-pdf-target * { display: unset !important; visibility: visible !important; }
+        #pm-pdf-target { position: fixed; inset: 0; background: #fff; overflow: visible; z-index: 9999; }
+        .pm-card-actions, .pm-proj-del, .pm-delete-btn, button, .chat-float-wrap { display: none !important; }
+        @page { margin: 15mm; size: A4 landscape; }
+      }
+    `;
+    document.head.appendChild(printStyle);
+    // Tag the active view container
+    const main = document.querySelector(".pm-main");
+    if (main) main.id = "pm-pdf-target";
+    window.print();
+    // Cleanup after print dialog closes
+    setTimeout(() => {
+      document.head.removeChild(printStyle);
+      if (main) main.removeAttribute("id");
+    }, 1000);
   };
 
   // Status-change confirmation
@@ -1039,7 +1108,27 @@ export default function Dashboard({ token, user, onLogout }) {
         .pm-modal-footer { display:flex; gap:10px; justify-content:flex-end; padding-top:6px; }
         .pm-btn-cancel { padding:9px 18px; border-radius:9px; border:1.5px solid var(--border); background:#fff; font-size:13.5px; font-weight:600; cursor:pointer; color:var(--muted); }
         .pm-btn-cancel:hover { background:var(--paper-deep); }
-        .pm-notif-badge { position:absolute; top:-5px; right:-5px; background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:16px; height:16px; display:flex; align-items:center; justify-content:center; padding:0 3px; border:1.5px solid #fff; pointer-events:none; }
+        /* Modern thin scrollbars for all scroll areas */
+        .pm-root *, .pm-board, .pm-cards, .pm-panel, .pm-modal, .pm-search-results,
+        .pm-thread, .chat-thread, .pm-bell-dropdown {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(26,127,168,0.3) transparent;
+        }
+        .pm-root *::-webkit-scrollbar { width: 5px; height: 5px; }
+        .pm-root *::-webkit-scrollbar-track { background: transparent; }
+        .pm-root *::-webkit-scrollbar-thumb { background: rgba(26,127,168,0.3); border-radius: 99px; }
+        .pm-root *::-webkit-scrollbar-thumb:hover { background: rgba(26,127,168,0.55); }
+        /* Smooth scroll everywhere */
+        .pm-cards, .pm-panel, .pm-modal, .pm-search-results, .pm-board { scroll-behavior: smooth; }
+        /* Kanban board horizontal scroll with snap */
+        .pm-board { scroll-snap-type: x proximity; }
+        .pm-col { scroll-snap-align: start; }
+        /* Hide scrollbar until hover on cards list */
+        .pm-cards { scrollbar-width: none; }
+        .pm-cards:hover { scrollbar-width: thin; }
+        .pm-cards::-webkit-scrollbar { width: 4px; }
+        .pm-cards:hover::-webkit-scrollbar-thumb { background: rgba(26,127,168,0.25); border-radius: 99px; }
+        .pm-cards::-webkit-scrollbar-thumb { background: transparent; }
         .pm-task-badge { position:absolute; top:-6px; right:-6px; background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:15px; height:15px; display:flex; align-items:center; justify-content:center; padding:0 2px; border:1.5px solid var(--card); pointer-events:none; z-index:2; }
         .pm-proj-badge { background:#EF4444; color:#fff; font-size:9px; font-weight:800; border-radius:999px; min-width:15px; height:15px; display:inline-flex; align-items:center; justify-content:center; padding:0 3px; margin-left:auto; flex-shrink:0; }
         .pm-activity-row { display:flex; align-items:flex-start; gap: 7px; padding: 6px 0; }
@@ -1173,13 +1262,36 @@ export default function Dashboard({ token, user, onLogout }) {
                 </span>
               )}
             </div>
+            {activeProject.my_role !== "owner" && (
+              <div
+                className="pm-proj-item"
+                style={{ color:"rgba(252,165,165,0.9)" }}
+                onClick={async () => {
+                  if (!window.confirm(`Leave "${activeProject.name}"? You'll lose access and need a new invitation.`)) return;
+                  try {
+                    await api.leaveProject(token, activeProject.id);
+                    setProjects((prev) => prev.filter((p) => p.id !== activeProject.id));
+                    setActiveProject(null);
+                  } catch (err) { setError(err.message); }
+                }}
+              >
+                <X size={13} /> Leave Project
+              </div>
+            )}
           </>
         )}
 
-        <div style={{ marginTop: "auto", padding: "14px 16px", borderTop: "1px solid rgba(255,255,255,0.12)", display: "flex", alignItems: "center", gap: 9 }}>
-          <div className="pm-avatar" style={{ background: user.color, marginLeft: 0, border: "none", flexShrink: 0 }}>{user.initials}</div>
-          <div style={{ fontSize: 12, flex: 1, color: "rgba(255,255,255,0.85)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</div>
-          <LogOut size={14} style={{ cursor: "pointer", color: "rgba(255,255,255,0.5)", flexShrink: 0 }} onClick={onLogout} />
+        <div
+          style={{ marginTop:"auto", padding:"14px 16px", borderTop:"1px solid rgba(255,255,255,0.12)", display:"flex", alignItems:"center", gap:9, cursor:"pointer" }}
+          onClick={() => { setShowProfile(true); setProfileTab("avatar"); setProfileMsg({ type:"", text:"" }); }}
+          title="My Profile"
+        >
+          {user.avatar_url
+            ? <img src={`${API_ORIGIN}${user.avatar_url}`} alt="avatar" style={{ width:30, height:30, borderRadius:"50%", objectFit:"cover", border:"2px solid rgba(255,255,255,0.4)", flexShrink:0 }} />
+            : <div className="pm-avatar" style={{ background: user.color, marginLeft:0, border:"none", flexShrink:0 }}>{user.initials}</div>
+          }
+          <div style={{ fontSize:12, flex:1, color:"rgba(255,255,255,0.85)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.name}</div>
+          <LogOut size={14} style={{ cursor:"pointer", color:"rgba(255,255,255,0.5)", flexShrink:0 }} onClick={(e) => { e.stopPropagation(); onLogout(); }} />
         </div>
 
         {/* Resize handle */}
@@ -1310,9 +1422,14 @@ export default function Dashboard({ token, user, onLogout }) {
                 onClearAll={clearAllNotifications}
               />
               {activeProject && (
-                <button className="pm-btn-ghost" onClick={openReport} title="Generate a full project report">
-                  <FileText size={14} /> Report
-                </button>
+                <>
+                  <button className="pm-btn-ghost" onClick={exportCurrentViewAsPDF} title="Export current view as PDF">
+                    <FileText size={14} /> Export PDF
+                  </button>
+                  <button className="pm-btn-ghost" onClick={openReport} title="Generate a full project report">
+                    <FileText size={14} /> Report
+                  </button>
+                </>
               )}
               <button className="pm-btn-primary" onClick={() => openNewTask("todo")} disabled={!activeProject}>
                 <Plus size={15} /> New Task
@@ -1635,38 +1752,54 @@ export default function Dashboard({ token, user, onLogout }) {
                 <label>Subtasks</label>
                 <div>
                   {newTaskSubtasks.map((s, idx) => (
-                    <div key={idx} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:5, background:"var(--paper-deep)", borderRadius:7, padding:"5px 8px" }}>
-                      <Square size={12} style={{ color:"var(--muted)", flexShrink:0 }} />
-                      <span style={{ flex:1, fontSize:12.5 }}>{s.title}</span>
-                      <X size={12} style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }} onClick={() => setNewTaskSubtasks((prev) => prev.filter((_, k) => k !== idx))} />
+                    <div key={idx} style={{ display:"flex", alignItems:"flex-start", gap:7, marginBottom:6, background:"var(--paper-deep)", borderRadius:7, padding:"6px 8px" }}>
+                      <Square size={12} style={{ color:"var(--muted)", flexShrink:0, marginTop:3 }} />
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12.5, fontWeight:600 }}>{s.title}</div>
+                        {s.targetAt && (
+                          <div style={{ fontSize:10.5, color:"#7C3AED" }}>
+                            🎯 {new Date(s.targetAt).toLocaleString([], { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}
+                          </div>
+                        )}
+                      </div>
+                      <X size={12} style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0, marginTop:3 }} onClick={() => { const fi=idx; setNewTaskSubtasks((prev) => prev.filter((_,k) => k!==fi)); }} />
                     </div>
                   ))}
-                  <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                  <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                     <input
-                      placeholder="Add a subtask and press Enter..."
+                      placeholder="Subtask title…"
                       value={newTaskSubInput}
                       onChange={(e) => setNewTaskSubInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && newTaskSubInput.trim()) {
-                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: "" }]);
-                          setNewTaskSubInput("");
+                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: newTaskSubTargetAt }]);
+                          setNewTaskSubInput(""); setNewTaskSubTargetAt("");
                         }
                       }}
-                      style={{ flex:1, border:"1.5px dashed var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit" }}
+                      style={{ width:"100%", border:"1.5px dashed var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit" }}
                     />
-                    <button
-                      type="button"
-                      className="pm-btn-ghost"
-                      style={{ padding:"7px 11px", fontSize:12.5 }}
-                      onClick={() => {
-                        if (newTaskSubInput.trim()) {
-                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: "" }]);
-                          setNewTaskSubInput("");
-                        }
-                      }}
-                    >
-                      + Add
-                    </button>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      <input
+                        type="datetime-local"
+                        value={newTaskSubTargetAt}
+                        onChange={(e) => setNewTaskSubTargetAt(e.target.value)}
+                        style={{ flex:1, border:"1.5px dashed var(--border)", borderRadius:8, padding:"6px 10px", fontSize:12, outline:"none", fontFamily:"inherit", color:"var(--muted)" }}
+                        title="Target date & time (optional)"
+                      />
+                      <button
+                        type="button"
+                        className="pm-btn-ghost"
+                        style={{ padding:"7px 14px", fontSize:12.5, whiteSpace:"nowrap" }}
+                        onClick={() => {
+                          if (newTaskSubInput.trim()) {
+                            setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: newTaskSubTargetAt }]);
+                            setNewTaskSubInput(""); setNewTaskSubTargetAt("");
+                          }
+                        }}
+                      >
+                        + Add
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1933,6 +2066,126 @@ export default function Dashboard({ token, user, onLogout }) {
       )}
 
       {/* -- Rename Project Modal -- */}
+      {/* -- Profile Modal -- */}
+      {showProfile && (
+        <div className="pm-modal-overlay" onClick={() => setShowProfile(false)}>
+          <div className="pm-modal" style={{ maxWidth:440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">My Profile</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowProfile(false)} />
+            </div>
+            <div className="pm-modal-body">
+              {/* Tab bar */}
+              <div style={{ display:"flex", gap:4, marginBottom:20, background:"var(--paper-deep)", borderRadius:10, padding:4 }}>
+                {[["avatar","🖼 Photo"],["password","🔒 Password"],["deactivate","⚠ Deactivate"]].map(([tab,label]) => (
+                  <button key={tab} onClick={() => { setProfileTab(tab); setProfileMsg({ type:"", text:"" }); }}
+                    style={{ flex:1, padding:"7px 0", fontSize:12, fontWeight:700, border:"none", borderRadius:7, cursor:"pointer",
+                      background: profileTab===tab ? "#fff" : "transparent",
+                      color: profileTab===tab ? "var(--teal-deep)" : "var(--muted)",
+                      boxShadow: profileTab===tab ? "0 1px 4px rgba(11,79,108,0.12)" : "none",
+                    }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {profileMsg.text && (
+                <div style={{ padding:"9px 12px", borderRadius:8, marginBottom:14, fontSize:12.5,
+                  background: profileMsg.type==="ok" ? "#D1FAE5" : "#FEE2E2",
+                  color: profileMsg.type==="ok" ? "#065F46" : "#991B1B",
+                }}>
+                  {profileMsg.text}
+                </div>
+              )}
+
+              {profileTab === "avatar" && (
+                <div style={{ textAlign:"center" }}>
+                  <div style={{ margin:"0 auto 16px", width:90, height:90, borderRadius:"50%", overflow:"hidden", border:"3px solid var(--border)", background:"var(--paper-deep)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                    {avatarPreview
+                      ? <img src={avatarPreview} alt="preview" style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+                      : user.avatar_url
+                        ? <img src={`${API_ORIGIN}${user.avatar_url}`} alt="avatar" style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+                        : <span style={{ fontSize:32, fontWeight:700, color:"var(--teal)" }}>{user.initials}</span>
+                    }
+                  </div>
+                  <input ref={profileFileRef} type="file" accept="image/*" style={{ display:"none" }}
+                    onChange={(e) => {
+                      const f = e.target.files[0];
+                      if (f) setAvatarPreview(URL.createObjectURL(f));
+                    }} />
+                  <button className="pm-btn-ghost" style={{ marginBottom:14 }} onClick={() => profileFileRef.current?.click()}>
+                    Choose Photo
+                  </button>
+                  <div className="pm-modal-footer">
+                    <button className="pm-btn-cancel" onClick={() => { setAvatarPreview(null); if(profileFileRef.current) profileFileRef.current.value=""; }}>Reset</button>
+                    <button className="pm-btn-primary" disabled={!avatarPreview} onClick={async () => {
+                      const f = profileFileRef.current?.files[0];
+                      if (!f) return;
+                      try {
+                        const res = await api.uploadAvatar(token, f);
+                        // Update local user display (parent holds user state via onAuthed)
+                        user.avatar_url = res.avatar_url;
+                        setAvatarPreview(null);
+                        setProfileMsg({ type:"ok", text:"Profile photo updated!" });
+                      } catch (err) { setProfileMsg({ type:"err", text: err.message }); }
+                    }}>
+                      Save Photo
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {profileTab === "password" && (
+                <div>
+                  <div className="pm-field-row">
+                    <label>Current Password</label>
+                    <input type="password" value={profileCurrentPw} onChange={(e) => setProfileCurrentPw(e.target.value)} placeholder="Enter current password" />
+                  </div>
+                  <div className="pm-field-row">
+                    <label>New Password</label>
+                    <input type="password" value={profileNewPw} onChange={(e) => setProfileNewPw(e.target.value)} placeholder="Min 8 characters" />
+                  </div>
+                  <div className="pm-modal-footer">
+                    <button className="pm-btn-cancel" onClick={() => { setProfileCurrentPw(""); setProfileNewPw(""); }}>Clear</button>
+                    <button className="pm-btn-primary" disabled={!profileCurrentPw || profileNewPw.length < 8}
+                      onClick={async () => {
+                        try {
+                          const res = await api.changePassword(token, profileCurrentPw, profileNewPw);
+                          setProfileMsg({ type:"ok", text: res.message });
+                          setProfileCurrentPw(""); setProfileNewPw("");
+                        } catch (err) { setProfileMsg({ type:"err", text: err.message }); }
+                      }}>
+                      Update Password
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {profileTab === "deactivate" && (
+                <div style={{ textAlign:"center", padding:"10px 0" }}>
+                  <div style={{ fontSize:40, marginBottom:12 }}>⚠️</div>
+                  <div style={{ fontSize:15, fontWeight:700, color:"#991B1B", marginBottom:8 }}>Deactivate Account</div>
+                  <div style={{ fontSize:13, color:"var(--muted)", marginBottom:20, lineHeight:1.6 }}>
+                    This will disable your account immediately. You will be signed out and will not be able to log in until an administrator reactivates your account.
+                  </div>
+                  <button
+                    style={{ background:"#EF4444", color:"#fff", border:"none", borderRadius:9, padding:"11px 28px", fontSize:14, fontWeight:700, cursor:"pointer" }}
+                    onClick={async () => {
+                      if (!window.confirm("Are you sure you want to deactivate your account? You will be signed out.")) return;
+                      try {
+                        await api.deactivateAccount(token);
+                        onLogout();
+                      } catch (err) { setProfileMsg({ type:"err", text: err.message }); }
+                    }}>
+                    Deactivate My Account
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showRenameProject && activeProject && (
         <div className="pm-modal-overlay" onClick={() => setShowRenameProject(false)}>
           <div className="pm-modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>

@@ -163,6 +163,8 @@ CREATE INDEX IF NOT EXISTS idx_project_invites_user ON project_invites(user_id, 
 
 -- New columns added to existing tables (idempotent)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'simple';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS search_vector tsvector
@@ -197,3 +199,13 @@ CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id);
 CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
+
+CREATE TABLE IF NOT EXISTS task_links (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  url TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_task_links_task ON task_links(task_id);

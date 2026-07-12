@@ -2,11 +2,35 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { sendPasswordResetEmail, sendVerificationEmail } = require("../email");
 
 const router = express.Router();
+
+// Avatar storage — save to /uploads/avatars/
+const avatarStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, "../../uploads/avatars");
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+    cb(null, `avatar_${req.user.id}_${Date.now()}${ext}`);
+  },
+});
+const uploadAvatar = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files are allowed"));
+  },
+});
 
 const COLORS = ["#1F6F78", "#C9A227", "#9C4221", "#3F7D52", "#5C7A89"];
 
@@ -23,7 +47,7 @@ function signToken(user) {
 }
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, initials: u.initials, color: u.color, is_verified: u.is_verified };
+  return { id: u.id, name: u.name, email: u.email, initials: u.initials, color: u.color, is_verified: u.is_verified, avatar_url: u.avatar_url || null };
 }
 
 // ----- Register -----
@@ -196,7 +220,7 @@ router.post("/reset-password", async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const result = await db.query(
-      "SELECT id, name, email, initials, color, is_verified FROM users WHERE id = $1",
+      "SELECT id, name, email, initials, color, is_verified, avatar_url FROM users WHERE id = $1",
       [req.user.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: "User not found" });
@@ -219,6 +243,46 @@ router.get("/search-users", requireAuth, async (req, res) => {
     [`%${q.trim()}%`, req.user.id]
   );
   res.json(result.rows);
+});
+
+// ----- Upload avatar -----
+router.post("/avatar", requireAuth, uploadAvatar.single("avatar"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No image file uploaded" });
+  const avatarUrl = `/uploads/avatars/${req.file.filename}`;
+  await db.query("UPDATE users SET avatar_url = $1 WHERE id = $2", [avatarUrl, req.user.id]);
+  res.json({ avatar_url: avatarUrl });
+});
+
+// ----- Change password -----
+router.post("/change-password", requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword)
+    return res.status(400).json({ error: "currentPassword and newPassword are required" });
+  if (newPassword.length < 8)
+    return res.status(400).json({ error: "New password must be at least 8 characters" });
+  try {
+    const result = await db.query("SELECT password_hash FROM users WHERE id = $1", [req.user.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "User not found" });
+    const valid = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
+    const hash = await bcrypt.hash(newPassword, 10);
+    await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [hash, req.user.id]);
+    res.json({ message: "Password updated successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to change password" });
+  }
+});
+
+// ----- Deactivate account -----
+router.post("/deactivate", requireAuth, async (req, res) => {
+  try {
+    await db.query("UPDATE users SET is_active = false WHERE id = $1", [req.user.id]);
+    res.json({ message: "Account deactivated. You have been signed out." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to deactivate account" });
+  }
 });
 
 module.exports = router;

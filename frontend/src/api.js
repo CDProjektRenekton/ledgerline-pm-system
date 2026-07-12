@@ -71,6 +71,7 @@ export const api = {
   addLink: (token, taskId, label, url) =>
     request("/links", { method: "POST", body: { taskId, label, url }, token }),
   deleteLink: (token, id) => request(`/links/${id}`, { method: "DELETE", token }),
+  listSubtasks: (token, taskId) => request(`/subtasks?taskId=${taskId}`, { token }),
   createSubtask: (token, taskId, title, targetAt) =>
     request("/subtasks", { method: "POST", body: { taskId, title, targetAt }, token }),
   updateSubtask: (token, id, patch) =>
@@ -101,7 +102,27 @@ export const api = {
   sendMessage: (token, projectId, body, taskRefId, mentionUserIds) =>
     request("/messages", { method: "POST", body: { projectId, body, taskRefId, mentionUserIds }, token }),
 
-  listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
+  // Profile
+  changePassword: (token, currentPassword, newPassword) =>
+    request("/auth/change-password", { method: "POST", body: { currentPassword, newPassword }, token }),
+  deactivateAccount: (token) =>
+    request("/auth/deactivate", { method: "POST", token }),
+  uploadAvatar: async (token, file) => {
+    const form = new FormData();
+    form.append("avatar", file);
+    const res = await fetch(`${API_BASE}/auth/avatar`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+    return data;
+  },
+
+  // Leave project
+  leaveProject: (token, projectId) =>
+    request(`/projects/${projectId}/leave`, { method: "POST", token }),
   createTeam: (token, projectId, name, color) =>
     request("/teams", { method: "POST", body: { projectId, name, color }, token }),
   deleteTeam: (token, id) => request(`/teams/${id}`, { method: "DELETE", token }),
