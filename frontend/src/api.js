@@ -123,6 +123,7 @@ export const api = {
   // Leave project
   leaveProject: (token, projectId) =>
     request(`/projects/${projectId}/leave`, { method: "POST", token }),
+  listTeams: (token, projectId) => request(`/teams?projectId=${projectId}`, { token }),
   createTeam: (token, projectId, name, color) =>
     request("/teams", { method: "POST", body: { projectId, name, color }, token }),
   deleteTeam: (token, id) => request(`/teams/${id}`, { method: "DELETE", token }),

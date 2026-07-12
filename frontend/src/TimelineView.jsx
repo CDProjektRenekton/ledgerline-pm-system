@@ -1,7 +1,8 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 
 const STATUS_COLOR = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
 const SUBTASK_COLOR = "#8B5CF6";
+const DAY_WIDTH = 36;
 
 function addDays(date, n) {
   const d = new Date(date);
@@ -14,6 +15,7 @@ function dayDiff(a, b) {
 
 export default function TimelineView({ tasks, onSelect }) {
   const dated = tasks.filter((t) => t.due_date);
+  const scrollRef = useRef(null);
 
   const { rangeStart, totalDays } = useMemo(() => {
     if (dated.length === 0) {
@@ -22,7 +24,9 @@ export default function TimelineView({ tasks, onSelect }) {
     }
     // Use start_date if available, otherwise created_at as the left anchor.
     // Also widen the range to cover any subtask target dates so markers
-    // never fall outside the visible grid.
+    // never fall outside the visible grid. No artificial cap — a task
+    // spanning January to December renders its full ~365-day width; use
+    // the Prev/Next/Today controls below to navigate across it.
     const starts = dated.map((t) => new Date(t.start_date || t.created_at));
     const due    = dated.map((t) => new Date(t.due_date));
     const subDates = dated.flatMap((t) => (t.subtasks || []).filter((s) => s.target_at).map((s) => new Date(s.target_at)));
@@ -36,12 +40,31 @@ export default function TimelineView({ tasks, onSelect }) {
   const days = Array.from({ length: totalDays }, (_, i) => addDays(rangeStart, i));
   const todayKey = new Date().toDateString();
 
+  // Move the visible window by a chunk of days (used by Prev/Next buttons)
+  const scrollByDays = (n) => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollBy({ left: n * DAY_WIDTH, behavior: "smooth" });
+    }
+  };
+  const scrollToToday = () => {
+    if (!scrollRef.current) return;
+    const offset = dayDiff(rangeStart, new Date());
+    scrollRef.current.scrollTo({ left: Math.max(0, offset * DAY_WIDTH - 200), behavior: "smooth" });
+  };
+  const scrollToStart = () => scrollRef.current?.scrollTo({ left: 0, behavior: "smooth" });
+  const scrollToEnd = () => scrollRef.current?.scrollTo({ left: totalDays * DAY_WIDTH, behavior: "smooth" });
+
   return (
-    <div className="pm-tlwrap">
+    <div style={{ display:"flex", flexDirection:"column", flex:1, overflow:"hidden" }}>
       <style>{`
-        .pm-tlwrap { padding: 18px 28px 22px; overflow: auto; flex: 1; }
+        .pm-tl-navbar { display:flex; align-items:center; justify-content:space-between; padding:14px 28px 0; flex-shrink:0; }
+        .pm-tl-navgroup { display:flex; align-items:center; gap:8px; }
+        .pm-tl-navbtn { display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card); font-size:12.5px; font-weight:600; color:var(--teal-deep); cursor:pointer; }
+        .pm-tl-navbtn:hover { background:var(--paper-deep); }
+        .pm-tl-navlabel { font-size:11.5px; color:var(--muted); }
+        .pm-tlwrap { padding: 14px 28px 22px; overflow: auto; flex: 1; }
         .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
-        .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; }
+        .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; position: sticky; left: 0; background: var(--card); z-index: 2; }
         .pm-tl-rowlabel:hover { background: #F4FAFE; }
         .pm-tl-track { position: relative; border-bottom: 1px solid var(--border); display: grid; min-height: 48px; }
         .pm-tl-cell { border-right: 1px solid #EEF6FC; }
@@ -50,10 +73,28 @@ export default function TimelineView({ tasks, onSelect }) {
         .pm-tl-bar:hover { opacity: 1; box-shadow: 0 2px 8px rgba(11,79,108,0.25); }
         .pm-tl-submarker { position: absolute; top: 31px; width: 9px; height: 9px; border-radius: 2px; transform: rotate(45deg); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
         .pm-tl-header { display: contents; }
-        .pm-tl-headlabel { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); background: var(--paper-deep); }
+        .pm-tl-headlabel { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); background: var(--paper-deep); position: sticky; left: 0; z-index: 3; }
         .pm-tl-headtrack { display: grid; background: var(--paper-deep); border-bottom: 1px solid var(--border); }
         .pm-tl-headday { font-size: 10px; color: var(--muted); text-align: center; padding: 8px 2px; border-right: 1px solid #EEF6FC; }
       `}</style>
+
+      {/* Navigation controls — move the visible window across long date ranges
+          (e.g. a task spanning January to December) without relying only on
+          the raw horizontal scrollbar. */}
+      <div className="pm-tl-navbar">
+        <div className="pm-tl-navlabel">
+          {totalDays} day{totalDays !== 1 ? "s" : ""} shown — {rangeStart.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} to {addDays(rangeStart, totalDays-1).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+        </div>
+        <div className="pm-tl-navgroup">
+          <button className="pm-tl-navbtn" onClick={scrollToStart} title="Jump to the earliest date">⏮ Start</button>
+          <button className="pm-tl-navbtn" onClick={() => scrollByDays(-14)} title="Move back 2 weeks">‹ Prev</button>
+          <button className="pm-tl-navbtn" onClick={scrollToToday} title="Jump to today">Today</button>
+          <button className="pm-tl-navbtn" onClick={() => scrollByDays(14)} title="Move forward 2 weeks">Next ›</button>
+          <button className="pm-tl-navbtn" onClick={scrollToEnd} title="Jump to the latest date">End ⏭</button>
+        </div>
+      </div>
+
+      <div className="pm-tlwrap" ref={scrollRef}>
 
       <div className="pm-tl-table" style={{ gridTemplateColumns: `220px repeat(${totalDays}, 36px)` }}>
         <div className="pm-tl-headlabel">Task</div>
@@ -130,9 +171,10 @@ export default function TimelineView({ tasks, onSelect }) {
           );
         })}
       </div>
+      </div>
 
       {dated.some((t) => (t.subtasks || []).some((s) => s.target_at)) && (
-        <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:10, fontSize:11.5, color:"var(--muted)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, padding:"0 28px 12px", fontSize:11.5, color:"var(--muted)", flexShrink:0 }}>
           <span style={{ width:9, height:9, borderRadius:2, background:SUBTASK_COLOR, transform:"rotate(45deg)", display:"inline-block" }} />
           Subtask target date
         </div>

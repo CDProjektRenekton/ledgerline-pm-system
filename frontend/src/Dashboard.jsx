@@ -110,6 +110,9 @@ export default function Dashboard({ token, user, onLogout }) {
   const [cardPopover, setCardPopover] = useState(null); // { taskId, type, x, y }
   const [popoverComment, setPopoverComment] = useState("");
   const [newTaskFiles, setNewTaskFiles] = useState([]);
+  const [newTaskLinks, setNewTaskLinks] = useState([]); // { label, url }
+  const [newTaskLinkLabel, setNewTaskLinkLabel] = useState("");
+  const [newTaskLinkUrl, setNewTaskLinkUrl] = useState("");
   // Subtask target date/time
   const [newSubtaskTarget, setNewSubtaskTarget] = useState("");
   // Date-time picker widget state for subtask completion
@@ -385,26 +388,47 @@ export default function Dashboard({ token, user, onLogout }) {
   };
 
   const exportCurrentViewAsPDF = () => {
-    // Use the browser's print API with a print-only stylesheet
+    // Use the same "print only this element" technique that already works
+    // correctly for the Report modal: visibility (not display) preserves
+    // every flex/grid layout inside the target, so content renders exactly
+    // as it looks on screen instead of collapsing into a blank page.
     const printStyle = document.createElement("style");
     printStyle.id = "pm-pdf-style";
     printStyle.textContent = `
       @media print {
-        body > * { display: none !important; }
-        #pm-pdf-target, #pm-pdf-target * { display: unset !important; visibility: visible !important; }
-        #pm-pdf-target { position: fixed; inset: 0; background: #fff; overflow: visible; z-index: 9999; }
-        .pm-card-actions, .pm-proj-del, .pm-delete-btn, button, .chat-float-wrap { display: none !important; }
-        @page { margin: 15mm; size: A4 landscape; }
+        body * { visibility: hidden; }
+        #pm-pdf-target, #pm-pdf-target * { visibility: visible; }
+        #pm-pdf-target {
+          position: absolute; left: 0; top: 0; width: 100%;
+          height: auto !important; max-height: none !important; overflow: visible !important;
+        }
+        /* Let every scrollable region print its FULL content instead of
+           clipping to whatever fit on screen at the time of export */
+        #pm-pdf-target .pm-board,
+        #pm-pdf-target .pm-cards,
+        #pm-pdf-target .pm-col,
+        #pm-pdf-target .cal-wrap,
+        #pm-pdf-target .pm-tlwrap,
+        #pm-pdf-target .pm-table-wrap {
+          height: auto !important; max-height: none !important; overflow: visible !important;
+        }
+        #pm-pdf-target .pm-board { flex-wrap: wrap !important; }
+        /* Hide anything interactive-only that shouldn't appear in a printed page */
+        #pm-pdf-target button,
+        #pm-pdf-target .pm-card-actions,
+        #pm-pdf-target .pm-proj-del,
+        #pm-pdf-target .pm-delete-btn,
+        #pm-pdf-target .pm-search,
+        #pm-pdf-target .chat-float-wrap { display: none !important; }
+        @page { margin: 12mm; size: A4 landscape; }
       }
     `;
     document.head.appendChild(printStyle);
-    // Tag the active view container
     const main = document.querySelector(".pm-main");
     if (main) main.id = "pm-pdf-target";
     window.print();
-    // Cleanup after print dialog closes
     setTimeout(() => {
-      document.head.removeChild(printStyle);
+      if (document.getElementById("pm-pdf-style")) document.head.removeChild(printStyle);
       if (main) main.removeAttribute("id");
     }, 1000);
   };
@@ -883,6 +907,10 @@ export default function Dashboard({ token, user, onLogout }) {
     setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
     setNewTaskSubtasks([]);
     setNewTaskSubInput("");
+    setNewTaskFiles([]);
+    setNewTaskLinks([]);
+    setNewTaskLinkLabel("");
+    setNewTaskLinkUrl("");
     setShowNewTask(true);
   };
 
@@ -911,8 +939,14 @@ export default function Dashboard({ token, user, onLogout }) {
         try { await api.uploadAttachment(token, created.id, file); }
         catch (e) { console.error("File upload failed:", e.message); }
       }
+      // Create any links that were staged in the modal
+      for (const link of newTaskLinks) {
+        try { await api.addLink(token, created.id, link.label, link.url); }
+        catch (e) { console.error("Link creation failed:", e.message); }
+      }
       setNewTaskFiles([]);
       setNewTaskSubtasks([]);
+      setNewTaskLinks([]);
       setShowNewTask(false);
       refreshTasks();
     } catch (err) {
@@ -1833,8 +1867,56 @@ export default function Dashboard({ token, user, onLogout }) {
                   </div>
                 )}
               </div>
+              <div className="pm-field-row">
+                <label>Attach Links</label>
+                <div>
+                  {newTaskLinks.map((l, idx) => (
+                    <div key={idx} style={{ display:"flex", alignItems:"center", gap:7, marginBottom:6, background:"#EFF8FF", border:"1px solid #BFDBFE", borderRadius:8, padding:"6px 10px" }}>
+                      <span style={{ flex:1, minWidth:0, fontSize:12.5, fontWeight:600, color:"#1D4ED8", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        🔗 {l.label}
+                      </span>
+                      <X size={12} style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }} onClick={() => { const fi=idx; setNewTaskLinks((prev) => prev.filter((_,k) => k!==fi)); }} />
+                    </div>
+                  ))}
+                  <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                    <input
+                      placeholder="Link name (e.g. Google Drive folder)"
+                      value={newTaskLinkLabel}
+                      onChange={(e) => setNewTaskLinkLabel(e.target.value)}
+                      style={{ width:"100%", border:"1.5px dashed var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit" }}
+                    />
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      <input
+                        placeholder="URL (e.g. https://…)"
+                        value={newTaskLinkUrl}
+                        onChange={(e) => setNewTaskLinkUrl(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && newTaskLinkLabel.trim() && newTaskLinkUrl.trim()) {
+                            setNewTaskLinks((prev) => [...prev, { label: newTaskLinkLabel.trim(), url: newTaskLinkUrl.trim() }]);
+                            setNewTaskLinkLabel(""); setNewTaskLinkUrl("");
+                          }
+                        }}
+                        style={{ flex:1, border:"1.5px dashed var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12.5, outline:"none", fontFamily:"inherit" }}
+                      />
+                      <button
+                        type="button"
+                        className="pm-btn-ghost"
+                        style={{ padding:"7px 14px", fontSize:12.5, whiteSpace:"nowrap" }}
+                        onClick={() => {
+                          if (newTaskLinkLabel.trim() && newTaskLinkUrl.trim()) {
+                            setNewTaskLinks((prev) => [...prev, { label: newTaskLinkLabel.trim(), url: newTaskLinkUrl.trim() }]);
+                            setNewTaskLinkLabel(""); setNewTaskLinkUrl("");
+                          }
+                        }}
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="pm-modal-footer" style={{ marginTop:18 }}>
-                <button className="pm-btn-cancel" onClick={() => { setShowNewTask(false); setNewTaskFiles([]); }}>Cancel</button>
+                <button className="pm-btn-cancel" onClick={() => { setShowNewTask(false); setNewTaskFiles([]); setNewTaskLinks([]); }}>Cancel</button>
                 <button className="pm-btn-primary" onClick={submitNewTask} disabled={!newTaskForm.title.trim()}>
                   <Plus size={14} /> Create Task
                 </button>

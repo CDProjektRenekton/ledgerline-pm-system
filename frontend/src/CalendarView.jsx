@@ -224,10 +224,15 @@ export default function CalendarView({ tasks, onSelect, onCreateDate }) {
                               background: STATUS_COLOR[bar.task.status] || "#6B92AD",
                               borderRadius: `${bar.left?0:4}px ${bar.right?0:4}px ${bar.right?0:4}px ${bar.left?0:4}px`,
                             }}
-                            title={bar.task.title}
+                            title={`${bar.task.title}${bar.task.assignee_name ? " · " + bar.task.assignee_name : bar.task.team_name ? " · " + bar.task.team_name : ""}`}
                             onClick={e => { e.stopPropagation(); onSelect(bar.task); }}
                           >
                             {bar.task.title}
+                            {(bar.task.assignee_name || bar.task.team_name) && (
+                              <span style={{ opacity:0.85, marginLeft:4, fontWeight:600 }}>
+                                · {bar.task.assignee_name ? bar.task.assignee_name.split(" ")[0] : bar.task.team_name}
+                              </span>
+                            )}
                           </div>
                         );
                       })}
