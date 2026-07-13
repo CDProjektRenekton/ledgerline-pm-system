@@ -1,6 +1,18 @@
 // Lightweight API client for the PM System backend.
 // Set VITE_API_BASE in a .env file to point elsewhere (default: http://localhost:4000/api).
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000/api";
+// Resolution order:
+//  1. Explicit VITE_API_BASE (used by the Render split deployment — frontend
+//     and backend are different domains, so this must always be set there)
+//  2. `npm run dev` (Vite's dev server on :5173, backend on :4000, not the
+//     same origin) — keep the historical localhost:4000 default so local
+//     development is unaffected
+//  3. A production build with NO explicit VITE_API_BASE — this is the
+//     single-process local/LAN deployment case (see LOCAL_LAN_DEPLOYMENT.md),
+//     where the frontend is served by the same Express process as the API.
+//     Using the page's own origin means the same build works from any LAN
+//     IP without ever needing to rebuild when that IP changes.
+const API_BASE = import.meta.env.VITE_API_BASE
+  || (import.meta.env.DEV ? "http://localhost:4000/api" : `${window.location.origin}/api`);
 
 const TOKEN_KEY = "pm_token";
 

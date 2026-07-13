@@ -52,6 +52,24 @@ app.use("/api/subtasks", subtaskRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/links",    linkRoutes);
 
+// --- Optional single-process local deployment ---
+// On Render, frontend and backend run as two separate services, so
+// ../../frontend/dist never exists inside the backend service and none of
+// this runs — the split cloud deployment is completely unaffected.
+// For an office running everything on one local machine (no Render, no
+// separate static host), building the frontend and starting only this
+// backend process serves the whole app — API + UI — from a single port,
+// which is far simpler to firewall and keep running on a LAN. See
+// LOCAL_LAN_DEPLOYMENT.md for the full setup.
+const frontendDist = path.join(__dirname, "..", "..", "frontend", "dist");
+if (require("fs").existsSync(frontendDist)) {
+  console.log("Serving built frontend from", frontendDist);
+  app.use(express.static(frontendDist));
+  app.get(/^(?!\/api).*/, (req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+}
+
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 app.use((err, req, res, next) => {
   console.error(err);
