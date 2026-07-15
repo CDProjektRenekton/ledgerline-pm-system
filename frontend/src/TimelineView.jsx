@@ -55,14 +55,19 @@ export default function TimelineView({ tasks, onSelect }) {
   const scrollToEnd = () => scrollRef.current?.scrollTo({ left: totalDays * DAY_WIDTH, behavior: "smooth" });
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", flex:1, minWidth:0, overflow:"hidden" }}>
+    <>
       <style>{`
         .pm-tl-navbar { display:flex; align-items:center; justify-content:space-between; padding:14px 28px 0; flex-shrink:0; }
         .pm-tl-navgroup { display:flex; align-items:center; gap:8px; }
         .pm-tl-navbtn { display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card); font-size:12.5px; font-weight:600; color:var(--teal-deep); cursor:pointer; }
         .pm-tl-navbtn:hover { background:var(--paper-deep); }
         .pm-tl-navlabel { font-size:11.5px; color:var(--muted); }
-        .pm-tlwrap { padding: 14px 28px 22px; overflow: auto; flex: 1; min-width: 0; }
+        /* width:0 + min-width:100% is a well-known, unambiguous way to force
+           a flex/grid child to take exactly its container's width and clip
+           (rather than grow to fit) an oversized child — this sidesteps the
+           row/column main-axis-vs-cross-axis distinction entirely, unlike a
+           bare min-width:0 which only affects a flex container's main axis. */
+        .pm-tlwrap { padding: 14px 28px 22px; overflow-x: auto; overflow-y: hidden; flex: 1; width: 0; min-width: 100%; box-sizing: border-box; }
         .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
         .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; position: sticky; left: 0; background: var(--card); z-index: 2; }
         .pm-tl-rowlabel:hover { background: #F4FAFE; }
@@ -80,7 +85,9 @@ export default function TimelineView({ tasks, onSelect }) {
 
       {/* Navigation controls — move the visible window across long date ranges
           (e.g. a task spanning January to December) without relying only on
-          the raw horizontal scrollbar. */}
+          the raw horizontal scrollbar. Sits as a direct sibling of the
+          scrollable region below (same nesting level Kanban's board already
+          uses successfully), not wrapped in an extra flex container. */}
       <div className="pm-tl-navbar">
         <div className="pm-tl-navlabel">
           {totalDays} day{totalDays !== 1 ? "s" : ""} shown — {rangeStart.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} to {addDays(rangeStart, totalDays-1).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
@@ -95,7 +102,6 @@ export default function TimelineView({ tasks, onSelect }) {
       </div>
 
       <div className="pm-tlwrap" ref={scrollRef}>
-
       <div className="pm-tl-table" style={{ gridTemplateColumns: `220px repeat(${totalDays}, 36px)` }}>
         <div className="pm-tl-headlabel">Task</div>
         {days.map((d, i) => (
@@ -179,6 +185,6 @@ export default function TimelineView({ tasks, onSelect }) {
           Subtask target date
         </div>
       )}
-    </div>
+    </>
   );
 }
