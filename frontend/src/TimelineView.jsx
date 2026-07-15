@@ -55,14 +55,14 @@ export default function TimelineView({ tasks, onSelect }) {
   const scrollToEnd = () => scrollRef.current?.scrollTo({ left: totalDays * DAY_WIDTH, behavior: "smooth" });
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", flex:1, overflow:"hidden" }}>
+    <div style={{ display:"flex", flexDirection:"column", flex:1, minWidth:0, overflow:"hidden" }}>
       <style>{`
         .pm-tl-navbar { display:flex; align-items:center; justify-content:space-between; padding:14px 28px 0; flex-shrink:0; }
         .pm-tl-navgroup { display:flex; align-items:center; gap:8px; }
         .pm-tl-navbtn { display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card); font-size:12.5px; font-weight:600; color:var(--teal-deep); cursor:pointer; }
         .pm-tl-navbtn:hover { background:var(--paper-deep); }
         .pm-tl-navlabel { font-size:11.5px; color:var(--muted); }
-        .pm-tlwrap { padding: 14px 28px 22px; overflow: auto; flex: 1; }
+        .pm-tlwrap { padding: 14px 28px 22px; overflow: auto; flex: 1; min-width: 0; }
         .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
         .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; position: sticky; left: 0; background: var(--card); z-index: 2; }
         .pm-tl-rowlabel:hover { background: #F4FAFE; }
