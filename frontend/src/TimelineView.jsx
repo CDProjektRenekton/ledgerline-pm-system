@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 
 const STATUS_COLOR = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
 const SUBTASK_COLOR = "#8B5CF6";
@@ -16,6 +16,25 @@ function dayDiff(a, b) {
 export default function TimelineView({ tasks, onSelect }) {
   const dated = tasks.filter((t) => t.due_date);
   const scrollRef = useRef(null);
+
+  // The two previous fixes assumed the browser's flex sizing algorithm would
+  // clip the oversized table correctly, and it didn't. Rather than guess at
+  // CSS box-model behavior a third time, measure the real available width in
+  // JavaScript and force the scroll container to that exact pixel value —
+  // this can't be ambiguous the way CSS flex/grid sizing rules can be.
+  // ".pm-main" is the one ancestor already proven to have a correctly
+  // bounded width (Kanban's board scrolls fine inside it), so it's the
+  // reliable thing to measure against.
+  const [wrapWidth, setWrapWidth] = useState(null);
+  useEffect(() => {
+    const mainEl = scrollRef.current?.closest(".pm-main");
+    if (!mainEl) return;
+    const measure = () => setWrapWidth(mainEl.getBoundingClientRect().width);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(mainEl);
+    return () => ro.disconnect();
+  }, []);
 
   const { rangeStart, totalDays } = useMemo(() => {
     if (dated.length === 0) {
@@ -62,12 +81,7 @@ export default function TimelineView({ tasks, onSelect }) {
         .pm-tl-navbtn { display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card); font-size:12.5px; font-weight:600; color:var(--teal-deep); cursor:pointer; }
         .pm-tl-navbtn:hover { background:var(--paper-deep); }
         .pm-tl-navlabel { font-size:11.5px; color:var(--muted); }
-        /* width:0 + min-width:100% is a well-known, unambiguous way to force
-           a flex/grid child to take exactly its container's width and clip
-           (rather than grow to fit) an oversized child — this sidesteps the
-           row/column main-axis-vs-cross-axis distinction entirely, unlike a
-           bare min-width:0 which only affects a flex container's main axis. */
-        .pm-tlwrap { padding: 14px 28px 22px; overflow-x: auto; overflow-y: hidden; flex: 1; width: 0; min-width: 100%; box-sizing: border-box; }
+        .pm-tlwrap { padding: 14px 28px 22px; overflow-x: auto; overflow-y: hidden; flex: 1; min-width: 0; box-sizing: border-box; }
         .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
         .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; position: sticky; left: 0; background: var(--card); z-index: 2; }
         .pm-tl-rowlabel:hover { background: #F4FAFE; }
@@ -101,7 +115,11 @@ export default function TimelineView({ tasks, onSelect }) {
         </div>
       </div>
 
-      <div className="pm-tlwrap" ref={scrollRef}>
+      <div
+        className="pm-tlwrap"
+        ref={scrollRef}
+        style={wrapWidth ? { width: `${wrapWidth}px`, maxWidth: `${wrapWidth}px` } : undefined}
+      >
       <div className="pm-tl-table" style={{ gridTemplateColumns: `220px repeat(${totalDays}, 36px)` }}>
         <div className="pm-tl-headlabel">Task</div>
         {days.map((d, i) => (
