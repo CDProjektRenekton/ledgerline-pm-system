@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { blockViewerWrites } = require("../middleware/permissions");
 const { emitToProject, emitToUser } = require("../socket");
 
 const router = express.Router();
@@ -33,7 +34,7 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/messages { projectId, body, taskRefId?, mentionUserIds? }
-router.post("/", async (req, res) => {
+router.post("/", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
   const { projectId, body, taskRefId, mentionUserIds = [] } = req.body;
   if (!projectId || !body?.trim()) {
     return res.status(400).json({ error: "projectId and body are required" });

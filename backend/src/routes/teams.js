@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getRole, canWrite, blockViewerWrites } = require("../middleware/permissions");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -30,7 +31,7 @@ router.get("/", async (req, res) => {
   res.json(teams);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
   const { projectId, name, color } = req.body;
   if (!projectId || !name) return res.status(400).json({ error: "projectId and name are required" });
   try {
@@ -50,8 +51,11 @@ router.post("/", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
-  const result = await db.query("DELETE FROM teams WHERE id = $1 RETURNING id", [id]);
-  if (result.rows.length === 0) return res.status(404).json({ error: "Team not found" });
+  const existing = await db.query("SELECT project_id FROM teams WHERE id = $1", [id]);
+  if (existing.rows.length === 0) return res.status(404).json({ error: "Team not found" });
+  const role = await getRole(existing.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+  await db.query("DELETE FROM teams WHERE id = $1", [id]);
   res.json({ ok: true });
 });
 
@@ -59,6 +63,10 @@ router.post("/:id/members", async (req, res) => {
   const { id } = req.params;
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId is required" });
+  const teamRow = await db.query("SELECT project_id FROM teams WHERE id = $1", [id]);
+  if (teamRow.rows.length === 0) return res.status(404).json({ error: "Team not found" });
+  const role = await getRole(teamRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
   await db.query(
     `INSERT INTO team_members (team_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [id, userId]
@@ -68,6 +76,10 @@ router.post("/:id/members", async (req, res) => {
 
 router.delete("/:id/members/:userId", async (req, res) => {
   const { id, userId } = req.params;
+  const teamRow = await db.query("SELECT project_id FROM teams WHERE id = $1", [id]);
+  if (teamRow.rows.length === 0) return res.status(404).json({ error: "Team not found" });
+  const role = await getRole(teamRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
   await db.query(`DELETE FROM team_members WHERE team_id = $1 AND user_id = $2`, [id, userId]);
   res.json({ ok: true });
 });

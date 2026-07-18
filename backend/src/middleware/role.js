@@ -24,7 +24,7 @@ function requireRole(...allowedRoles) {
     }
 
     const userRole = result.rows[0].role;
-    const ROLE_RANK = { owner: 3, admin: 2, member: 1 };
+    const { ROLE_RANK } = require("./permissions");
     const userRank = ROLE_RANK[userRole] || 0;
     const requiredRank = Math.min(...allowedRoles.map((r) => ROLE_RANK[r] || 0));
 

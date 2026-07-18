@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { blockViewerWrites } = require("../middleware/permissions");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -12,7 +13,7 @@ router.get("/", async (req, res) => {
   res.json(result.rows);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
   const { projectId, name, color } = req.body;
   if (!projectId || !name) return res.status(400).json({ error: "projectId and name are required" });
   const result = await db.query(

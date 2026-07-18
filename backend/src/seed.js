@@ -51,7 +51,7 @@ async function seed() {
     for (const uid of userIds) {
       await db.query(
         `INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-        [projectId, uid, uid === userIds[0] ? "owner" : "member"]
+        [projectId, uid, uid === userIds[0] ? "owner" : "contributor"]
       );
     }
   }

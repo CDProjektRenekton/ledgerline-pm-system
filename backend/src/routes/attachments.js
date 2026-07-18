@@ -4,6 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getRole, canWrite } = require("../middleware/permissions");
 const { logHistory } = require("../history");
 
 const router = express.Router();
@@ -41,6 +42,18 @@ router.post("/", upload.single("file"), async (req, res) => {
   if (!taskId || !req.file) {
     return res.status(400).json({ error: "taskId and a file are required" });
   }
+
+  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
+  if (taskRow.rows.length === 0) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(404).json({ error: "Task not found" });
+  }
+  const role = await getRole(taskRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) {
+    fs.unlink(req.file.path, () => {}); // don't leave an orphaned upload on disk
+    return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+  }
+
   const url = `/uploads/${req.file.filename}`;
   const result = await db.query(
     `INSERT INTO attachments (task_id, filename, url, uploaded_by) VALUES ($1,$2,$3,$4) RETURNING *`,
@@ -52,8 +65,13 @@ router.post("/", upload.single("file"), async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
-  const existing = await db.query("SELECT * FROM attachments WHERE id = $1", [id]);
+  const existing = await db.query(
+    "SELECT a.*, t.project_id FROM attachments a JOIN tasks t ON t.id = a.task_id WHERE a.id = $1",
+    [id]
+  );
   if (existing.rows.length === 0) return res.status(404).json({ error: "Attachment not found" });
+  const role = await getRole(existing.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
 
   const filePath = path.join(UPLOAD_DIR, path.basename(existing.rows[0].url));
   fs.unlink(filePath, () => {}); // best-effort cleanup, ignore errors

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS project_members (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL DEFAULT 'member', -- owner | admin | member
+  role TEXT NOT NULL DEFAULT 'contributor', -- owner | admin | contributor | viewer
   PRIMARY KEY (project_id, user_id)
 );
 
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS project_invites (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  role TEXT NOT NULL DEFAULT 'member',
+  role TEXT NOT NULL DEFAULT 'contributor', -- owner | admin | contributor | viewer
   status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, user_id)
@@ -209,3 +209,12 @@ CREATE TABLE IF NOT EXISTS task_links (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_task_links_task ON task_links(task_id);
+
+-- Role system: owner / admin / contributor / viewer. "member" was the old
+-- name for what's now "contributor" (full task access, no project/member
+-- administration) — rename any existing rows and update column defaults so
+-- new rows default correctly on installs that already had data.
+UPDATE project_members SET role = 'contributor' WHERE role = 'member';
+UPDATE project_invites SET role = 'contributor' WHERE role = 'member';
+ALTER TABLE project_members ALTER COLUMN role SET DEFAULT 'contributor';
+ALTER TABLE project_invites ALTER COLUMN role SET DEFAULT 'contributor';

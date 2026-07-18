@@ -27,6 +27,8 @@ import {
   FileText,
   Mail,
   Check,
+  Download,
+  FileUp,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import { api, API_ORIGIN } from "./api";
@@ -37,6 +39,7 @@ import TeamsPanel from "./TeamsPanel.jsx";
 import MembersPanel from "./MembersPanel.jsx";
 import NotificationBell from "./NotificationBell.jsx";
 import ChatPanel from "./ChatPanel.jsx";
+import { csvToTaskRows } from "./csv.js";
 
 const COLUMNS = [
   { id: "todo",       label: "To Do",       no: "01", accent: "#6B92AD" },
@@ -101,6 +104,13 @@ export default function Dashboard({ token, user, onLogout }) {
   const [newProjDesc, setNewProjDesc] = useState("");
   // New task modal
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showImportTasks, setShowImportTasks] = useState(false);
+  const [importRows, setImportRows] = useState([]);       // parsed rows awaiting import
+  const [importFileName, setImportFileName] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null); // { createdCount, errors, warnings }
+  const importFileRef = useRef(null);
   const [newTaskStatus, setNewTaskStatus] = useState("todo");
   const [newTaskForm, setNewTaskForm] = useState({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate:"", dueDate:"", category:"simple" });
   const [newTaskSubtasks, setNewTaskSubtasks] = useState([]); // { title, targetAt }
@@ -954,6 +964,56 @@ export default function Dashboard({ token, user, onLogout }) {
     }
   };
 
+  // -- Task import (CSV) --
+  const openImportTasks = () => {
+    setImportRows([]);
+    setImportFileName("");
+    setImportError("");
+    setImportResult(null);
+    setShowImportTasks(true);
+  };
+
+  const handleImportFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError("");
+    setImportResult(null);
+    setImportFileName(file.name);
+    try {
+      const text = await file.text();
+      const rows = csvToTaskRows(text);
+      if (rows.length === 0) {
+        setImportRows([]);
+        setImportError("No task rows found in that file — check it still has the header row plus at least one task below it.");
+        return;
+      }
+      if (rows.length > 500) {
+        setImportRows([]);
+        setImportError(`That file has ${rows.length} rows — imports are limited to 500 at a time. Split it into smaller batches.`);
+        return;
+      }
+      setImportRows(rows);
+    } catch (err) {
+      setImportRows([]);
+      setImportError("Couldn't read that file. Make sure it's a .csv exported or saved from Excel/Sheets.");
+    }
+  };
+
+  const submitImportTasks = async () => {
+    if (!activeProject || importRows.length === 0) return;
+    setImporting(true);
+    setImportError("");
+    try {
+      const result = await api.importTasks(token, activeProject.id, importRows);
+      setImportResult(result);
+      if (result.createdCount > 0) refreshTasks();
+    } catch (err) {
+      setImportError(err.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   // Card quick-action popover helpers
   const openCardPopover = (e, taskId, type) => {
     e.stopPropagation();
@@ -1014,6 +1074,10 @@ export default function Dashboard({ token, user, onLogout }) {
 
   const ACTIVITY_PREVIEW = 5;
   const visibleActivity = showAllActivity ? activityFeed : activityFeed.slice(-ACTIVITY_PREVIEW);
+
+  // Viewers get a read-only experience: no status changes, no subtasks, no
+  // comments/attachments/links, no chat, no drag-and-drop, no task creation.
+  const isViewer = activeProject?.my_role === "viewer";
 
   return (
     <div className="pm-root" onClick={() => { setShowInvites(false); }}>
@@ -1210,7 +1274,7 @@ export default function Dashboard({ token, user, onLogout }) {
       >
         <div className="pm-sidebar-brand" style={{ opacity: sidebarCollapsed ? 0 : 1 }}>
           <img
-            src="https://i.ibb.co/fdDx5fKP/1200px-Metropolitan-Waterworks-and-Sewerage-System-MWSS-NAWASA-svg.png"
+            src="https://i.ibb.co/6R9j9kvg/mwss-logo-seal.png"
             alt="MWSS Logo"
             style={{ width: 46, height: 46, objectFit: "contain", flexShrink: 0 }}
             onError={(e) => { e.target.style.display = "none"; }}
@@ -1246,18 +1310,18 @@ export default function Dashboard({ token, user, onLogout }) {
         ))}
 
         {/* Invited Projects */}
-        {projects.filter((p) => p.my_role === "member").length > 0 && (
+        {projects.filter((p) => p.my_role === "contributor" || p.my_role === "viewer").length > 0 && (
           <div className="pm-sidebar-section" style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span>👥</span> Invited Projects
           </div>
         )}
-        {projects.filter((p) => p.my_role === "member").map((p) => (
+        {projects.filter((p) => p.my_role === "contributor" || p.my_role === "viewer").map((p) => (
           <div
             key={p.id}
             className={`pm-proj-item ${activeProject && activeProject.id === p.id ? "active" : ""}`}
             onClick={() => setActiveProject(p)}
           >
-            <span style={{ fontSize:12, flexShrink:0 }}>👤</span>
+            <span style={{ fontSize:12, flexShrink:0 }} title={p.my_role === "viewer" ? "Viewer — view only" : "Contributor"}>{p.my_role === "viewer" ? "👁" : "👤"}</span>
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
             {projectUnreadCounts[p.id] > 0 && (
               <span className="pm-proj-badge">{projectUnreadCounts[p.id] > 9 ? "9+" : projectUnreadCounts[p.id]}</span>
@@ -1465,9 +1529,16 @@ export default function Dashboard({ token, user, onLogout }) {
                   </button>
                 </>
               )}
-              <button className="pm-btn-primary" onClick={() => openNewTask("todo")} disabled={!activeProject}>
-                <Plus size={15} /> New Task
-              </button>
+              {!isViewer && (
+                <button className="pm-btn-ghost" onClick={openImportTasks} disabled={!activeProject}>
+                  <FileUp size={14} /> Import Tasks
+                </button>
+              )}
+              {!isViewer && (
+                <button className="pm-btn-primary" onClick={() => openNewTask("todo")} disabled={!activeProject}>
+                  <Plus size={15} /> New Task
+                </button>
+              )}
             </div>
           </div>
 
@@ -1530,10 +1601,10 @@ export default function Dashboard({ token, user, onLogout }) {
                       <div
                         key={t.id}
                         className="pm-card"
-                        draggable
+                        draggable={!isViewer}
                         onDragStart={() => (dragTaskId.current = t.id)}
                         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        onDrop={(e) => handleCardDrop(e, col.id, t)}
+                        onDrop={(e) => !isViewer && handleCardDrop(e, col.id, t)}
                         onClick={() => setSelectedTask(t)}
                         style={{ position: "relative" }}
                       >
@@ -1582,14 +1653,16 @@ export default function Dashboard({ token, user, onLogout }) {
                           ) : null}
                         </div>
                         {/* Shortcut action buttons — appear on card hover, icon-only */}
-                        <div className="pm-card-actions">
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "status")} title="Change Status"><RotateCw size={13} /></button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "priority")} title="Change Priority"><Flag size={13} /></button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee"><User size={13} /></button>
-                          <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment"><Paperclip size={13} /></button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment"><MessageSquare size={13} /></button>
-                          <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "subtask")} title="Add Subtask"><CheckSquare size={13} /></button>
-                        </div>
+                        {!isViewer && (
+                          <div className="pm-card-actions">
+                            <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "status")} title="Change Status"><RotateCw size={13} /></button>
+                            <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "priority")} title="Change Priority"><Flag size={13} /></button>
+                            <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "assignee")} title="Change Assignee"><User size={13} /></button>
+                            <button className="pm-card-action-btn" onClick={(e) => { e.stopPropagation(); setSelectedTask(t); setTimeout(()=>fileInputRef.current?.click(),100); }} title="Add Attachment"><Paperclip size={13} /></button>
+                            <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "comment")} title="Write Comment"><MessageSquare size={13} /></button>
+                            <button className="pm-card-action-btn" onClick={(e) => openCardPopover(e, t.id, "subtask")} title="Add Subtask"><CheckSquare size={13} /></button>
+                          </div>
+                        )}
                         {/* Subtask mini-list with checkboxes */}
                         {t.subtasks && t.subtasks.length > 0 && (
                           <div style={{ margin:"6px 0 4px", borderTop:"1px solid var(--border)", paddingTop:5 }}>
@@ -1601,7 +1674,7 @@ export default function Dashboard({ token, user, onLogout }) {
                                 >
                                   <span
                                     style={{ color: s.is_done ? "var(--teal)" : "var(--muted)", flexShrink:0, display:"flex" }}
-                                    onClick={(e) => { e.stopPropagation(); toggleSubtask(s.id, !s.is_done); }}
+                                    onClick={(e) => { e.stopPropagation(); if (!isViewer) toggleSubtask(s.id, !s.is_done); }}
                                   >
                                     {s.is_done ? <CheckSquare size={12} /> : <Square size={12} />}
                                   </span>
@@ -1630,15 +1703,17 @@ export default function Dashboard({ token, user, onLogout }) {
                     ))}
                   </div>
 
-                  <div className="pm-quickadd">
-                    <input
-                      placeholder="+ Add a task…"
-                      value={quickAdd[col.id] || ""}
-                      onChange={(e) => setQuickAdd((q) => ({ ...q, [col.id]: e.target.value }))}
-                      onFocus={() => { openNewTask(col.id); setQuickAdd((q) => ({ ...q, [col.id]: "" })); }}
-                      readOnly
-                    />
-                  </div>
+                  {!isViewer && (
+                    <div className="pm-quickadd">
+                      <input
+                        placeholder="+ Add a task…"
+                        value={quickAdd[col.id] || ""}
+                        onChange={(e) => setQuickAdd((q) => ({ ...q, [col.id]: e.target.value }))}
+                        onFocus={() => { openNewTask(col.id); setQuickAdd((q) => ({ ...q, [col.id]: "" })); }}
+                        readOnly
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1652,7 +1727,7 @@ export default function Dashboard({ token, user, onLogout }) {
               const full = tasks.find((x) => x.id === t.id) || t;
               setSelectedTask(full);
             }}
-            onCreateDate={(dateKey) => {
+            onCreateDate={isViewer ? undefined : (dateKey) => {
               setNewTaskStatus("todo");
               setNewTaskForm({ title:"", description:"", priority:"medium", assigneeId:"", assigneeTeamId:"", startDate: dateKey, dueDate: dateKey, category:"simple" });
               setShowNewTask(true);
@@ -1921,6 +1996,109 @@ export default function Dashboard({ token, user, onLogout }) {
                   <Plus size={14} /> Create Task
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -- Import Tasks Modal -- */}
+      {showImportTasks && (
+        <div className="pm-modal-overlay" onClick={() => setShowImportTasks(false)}>
+          <div className="pm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pm-modal-head">
+              <div className="pm-modal-title">Import Tasks</div>
+              <X size={18} style={{ cursor:"pointer", color:"var(--muted)" }} onClick={() => setShowImportTasks(false)} />
+            </div>
+            <div className="pm-modal-body">
+              {!importResult && (
+                <>
+                  <div style={{ fontSize:12.5, color:"var(--muted)", marginBottom:14, lineHeight:1.6 }}>
+                    Import tasks in bulk from a CSV file (opens and edits fine in Excel or Google Sheets).
+                    Start from the template below — it covers every task field, including subtasks and labels.
+                  </div>
+                  <a
+                    href="/task-import-template.csv"
+                    download="task-import-template.csv"
+                    className="pm-btn-ghost"
+                    style={{ width:"fit-content", marginBottom:16, textDecoration:"none" }}
+                  >
+                    <Download size={13} /> Download CSV Template
+                  </a>
+
+                  <div className="pm-field-row">
+                    <label>CSV File</label>
+                    <input
+                      ref={importFileRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      style={{ display:"none" }}
+                      onChange={handleImportFileSelected}
+                    />
+                    <div
+                      onClick={() => importFileRef.current && importFileRef.current.click()}
+                      style={{ border:"1.5px dashed var(--border)", borderRadius:9, padding:"10px 14px", cursor:"pointer", color:"var(--muted)", fontSize:13, display:"flex", alignItems:"center", gap:8, background:"#F8FCFF" }}
+                    >
+                      <FileUp size={14} />
+                      {importFileName || "Click to choose a .csv file…"}
+                    </div>
+                  </div>
+
+                  {importError && <div style={{ fontSize:12.5, color:"#DC2626", marginTop:6 }}>{importError}</div>}
+
+                  {importRows.length > 0 && !importError && (
+                    <div style={{ marginTop:14 }}>
+                      <div style={{ fontSize:12.5, fontWeight:600, marginBottom:8 }}>
+                        Ready to import {importRows.length} task{importRows.length === 1 ? "" : "s"}:
+                      </div>
+                      <div style={{ maxHeight:180, overflowY:"auto", border:"1px solid var(--border)", borderRadius:9 }}>
+                        {importRows.slice(0, 20).map((r, i) => (
+                          <div key={i} style={{ padding:"6px 10px", fontSize:12, borderBottom: i < importRows.length - 1 ? "1px solid var(--border)" : "none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                            {r.title || <span style={{ color:"#DC2626" }}>(missing title)</span>}
+                          </div>
+                        ))}
+                        {importRows.length > 20 && (
+                          <div style={{ padding:"6px 10px", fontSize:11.5, color:"var(--muted)" }}>+{importRows.length - 20} more…</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pm-modal-footer" style={{ marginTop:18 }}>
+                    <button className="pm-btn-cancel" onClick={() => setShowImportTasks(false)}>Cancel</button>
+                    <button className="pm-btn-primary" onClick={submitImportTasks} disabled={importRows.length === 0 || importing}>
+                      <FileUp size={14} /> {importing ? "Importing…" : `Import ${importRows.length || ""} Task${importRows.length === 1 ? "" : "s"}`}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {importResult && (
+                <>
+                  <div style={{ fontSize:14, fontWeight:700, color: importResult.createdCount > 0 ? "#3F7D52" : "#DC2626", marginBottom:10 }}>
+                    {importResult.createdCount} task{importResult.createdCount === 1 ? "" : "s"} imported
+                    {importResult.errorCount > 0 && `, ${importResult.errorCount} row${importResult.errorCount === 1 ? "" : "s"} skipped`}
+                  </div>
+                  {importResult.warnings?.length > 0 && (
+                    <div style={{ marginBottom:12 }}>
+                      <div style={{ fontSize:12, fontWeight:600, color:"#B45309", marginBottom:4 }}>Warnings</div>
+                      {importResult.warnings.map((w, i) => (
+                        <div key={i} style={{ fontSize:12, color:"#B45309" }}>Row {w.row}: {w.message}</div>
+                      ))}
+                    </div>
+                  )}
+                  {importResult.errors?.length > 0 && (
+                    <div style={{ marginBottom:12 }}>
+                      <div style={{ fontSize:12, fontWeight:600, color:"#DC2626", marginBottom:4 }}>Skipped rows</div>
+                      {importResult.errors.map((e, i) => (
+                        <div key={i} style={{ fontSize:12, color:"#DC2626" }}>Row {e.row}: {e.message}</div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="pm-modal-footer" style={{ marginTop:10 }}>
+                    <button className="pm-btn-primary" onClick={() => setShowImportTasks(false)}>Done</button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2445,8 +2623,9 @@ export default function Dashboard({ token, user, onLogout }) {
               value={editTitle !== null ? editTitle : selectedTask.title}
               onChange={(e) => setEditTitle(e.target.value)}
               onBlur={() => saveTaskText(selectedTask.id)}
+              readOnly={isViewer}
             />
-            {editTitle !== null && editTitle !== selectedTask.title && (
+            {!isViewer && editTitle !== null && editTitle !== selectedTask.title && (
               <div className="pm-save-row">
                 <button className="pm-btn-primary" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => saveTaskText(selectedTask.id)}>Save title</button>
               </div>
@@ -2459,8 +2638,9 @@ export default function Dashboard({ token, user, onLogout }) {
               placeholder="Add a description…"
               onChange={(e) => setEditDesc(e.target.value)}
               onBlur={() => saveTaskText(selectedTask.id)}
+              readOnly={isViewer}
             />
-            {editDesc !== null && editDesc !== (selectedTask.description || "") && (
+            {!isViewer && editDesc !== null && editDesc !== (selectedTask.description || "") && (
               <div className="pm-save-row">
                 <button className="pm-btn-primary" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => saveTaskText(selectedTask.id)}>Save description</button>
               </div>
@@ -2472,14 +2652,14 @@ export default function Dashboard({ token, user, onLogout }) {
                 <div
                   className="pm-subtask-row"
                   key={s.id}
-                  draggable
+                  draggable={!isViewer}
                   onDragStart={() => handleSubtaskDragStart(s.id)}
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => handleSubtaskDrop(s.id)}
-                  style={{ cursor:"grab", alignItems:"flex-start" }}
+                  onDrop={() => !isViewer && handleSubtaskDrop(s.id)}
+                  style={{ cursor: isViewer ? "default" : "grab", alignItems:"flex-start" }}
                 >
-                  <span style={{ color:"var(--muted)", fontSize:10, marginRight:2, cursor:"grab", marginTop:2 }}>⠿</span>
-                  <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} style={{ marginTop:2 }} onClick={() => toggleSubtask(s.id, !s.is_done)}>
+                  <span style={{ color:"var(--muted)", fontSize:10, marginRight:2, cursor: isViewer ? "default" : "grab", marginTop:2 }}>⠿</span>
+                  <span className={`pm-subtask-check ${s.is_done ? "done" : ""}`} style={{ marginTop:2 }} onClick={() => !isViewer && toggleSubtask(s.id, !s.is_done)}>
                     {s.is_done ? <CheckSquare size={16} /> : <Square size={16} />}
                   </span>
                   <div style={{ flex:1, minWidth:0 }}>
@@ -2495,51 +2675,57 @@ export default function Dashboard({ token, user, onLogout }) {
                       </div>
                     )}
                   </div>
-                  <span
-                    title="Edit subtask"
-                    style={{ cursor:"pointer", color:"var(--muted)", opacity:0, transition:"opacity .15s", fontSize:11, marginTop:2 }}
-                    className="pm-subtask-edit-btn"
-                    onClick={() => setEditingSubtask({ id: s.id, title: s.title, target_at: s.target_at ? new Date(s.target_at).toISOString().slice(0,16) : "" })}
-                  >
-                    ✎
-                  </span>
-                  <X size={13} className="pm-subtask-del" style={{ marginTop:2 }} onClick={() => deleteSubtask(s.id)} />
+                  {!isViewer && (
+                    <>
+                      <span
+                        title="Edit subtask"
+                        style={{ cursor:"pointer", color:"var(--muted)", opacity:0, transition:"opacity .15s", fontSize:11, marginTop:2 }}
+                        className="pm-subtask-edit-btn"
+                        onClick={() => setEditingSubtask({ id: s.id, title: s.title, target_at: s.target_at ? new Date(s.target_at).toISOString().slice(0,16) : "" })}
+                      >
+                        ✎
+                      </span>
+                      <X size={13} className="pm-subtask-del" style={{ marginTop:2 }} onClick={() => deleteSubtask(s.id)} />
+                    </>
+                  )}
                 </div>
               ))}
-              <div className="pm-subtask-add" style={{ flexDirection:"column", alignItems:"stretch", gap:6 }}>
-                <input
-                  placeholder="Add a subtask…"
-                  value={newSubtask}
-                  onChange={(e) => setNewSubtask(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addSubtask()}
-                />
-                <div style={{ display:"flex", gap:6 }}>
+              {!isViewer && (
+                <div className="pm-subtask-add" style={{ flexDirection:"column", alignItems:"stretch", gap:6 }}>
                   <input
-                    type="datetime-local"
-                    value={newSubtaskTarget}
-                    onChange={(e) => setNewSubtaskTarget(e.target.value)}
-                    style={{ flex:1, border:"1px dashed var(--border)", borderRadius:7, padding:"5px 8px", fontSize:11.5, outline:"none" }}
-                    title="Target completion date/time (optional)"
+                    placeholder="Add a subtask…"
+                    value={newSubtask}
+                    onChange={(e) => setNewSubtask(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addSubtask()}
                   />
-                  <button className="pm-btn-primary" style={{ padding:"5px 12px", fontSize:11.5 }} onClick={addSubtask}>Add</button>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <input
+                      type="datetime-local"
+                      value={newSubtaskTarget}
+                      onChange={(e) => setNewSubtaskTarget(e.target.value)}
+                      style={{ flex:1, border:"1px dashed var(--border)", borderRadius:7, padding:"5px 8px", fontSize:11.5, outline:"none" }}
+                      title="Target completion date/time (optional)"
+                    />
+                    <button className="pm-btn-primary" style={{ padding:"5px 12px", fontSize:11.5 }} onClick={addSubtask}>Add</button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <div className="pm-field-label">Status</div>
-            <select className="pm-select" value={selectedTask.status} onChange={(e) => requestStatusChange(selectedTask.id, e.target.value, selectedTask.title)}>
+            <select className="pm-select" value={selectedTask.status} disabled={isViewer} onChange={(e) => requestStatusChange(selectedTask.id, e.target.value, selectedTask.title)}>
               {COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
 
             <div className="pm-field-label">Priority</div>
-            <select className="pm-select" value={selectedTask.priority} onChange={(e) => patchTask(selectedTask.id, { priority: e.target.value })}>
+            <select className="pm-select" value={selectedTask.priority} disabled={isViewer} onChange={(e) => patchTask(selectedTask.id, { priority: e.target.value })}>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
             </select>
 
             <div className="pm-field-label">Category</div>
-            <select className="pm-select" value={selectedTask.category || "simple"} onChange={(e) => patchTask(selectedTask.id, { category: e.target.value })}>
+            <select className="pm-select" value={selectedTask.category || "simple"} disabled={isViewer} onChange={(e) => patchTask(selectedTask.id, { category: e.target.value })}>
               <option value="simple">Simple</option>
               <option value="complex">Complex</option>
             </select>
@@ -2548,6 +2734,7 @@ export default function Dashboard({ token, user, onLogout }) {
             <select
               className="pm-select"
               value={selectedTask.assignee_team_id ? `team-${selectedTask.assignee_team_id}` : selectedTask.assignee_id ? `user-${selectedTask.assignee_id}` : ""}
+              disabled={isViewer}
               onChange={(e) => {
                 const val = e.target.value;
                 if (!val) patchTask(selectedTask.id, { assigneeId: null, assigneeTeamId: null });
@@ -2571,11 +2758,11 @@ export default function Dashboard({ token, user, onLogout }) {
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <div>
                 <div className="pm-field-label">Start date</div>
-                <input type="date" className="pm-dateinput" value={selectedTask.start_date ? selectedTask.start_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { startDate: e.target.value })} />
+                <input type="date" className="pm-dateinput" disabled={isViewer} value={selectedTask.start_date ? selectedTask.start_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { startDate: e.target.value })} />
               </div>
               <div>
                 <div className="pm-field-label">Due date</div>
-                <input type="date" className="pm-dateinput" value={selectedTask.due_date ? selectedTask.due_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { dueDate: e.target.value })} />
+                <input type="date" className="pm-dateinput" disabled={isViewer} value={selectedTask.due_date ? selectedTask.due_date.slice(0, 10) : ""} onChange={(e) => patchTask(selectedTask.id, { dueDate: e.target.value })} />
               </div>
             </div>
 
@@ -2586,7 +2773,7 @@ export default function Dashboard({ token, user, onLogout }) {
                   <a href={`${API_ORIGIN}${a.url}`} target="_blank" rel="noreferrer" className="pm-attachment-link">
                     <Paperclip size={12} /> {a.filename}
                   </a>
-                  <Trash2 size={13} className="pm-attachment-del" onClick={() => removeAttachment(a.id)} />
+                  {!isViewer && <Trash2 size={13} className="pm-attachment-del" onClick={() => removeAttachment(a.id)} />}
                 </div>
                 <div style={{ fontSize:10.5, color:"var(--muted)", paddingLeft:18 }}>
                   {a.uploaded_by_name ? `${a.uploaded_by_name} · ` : ""}
@@ -2594,21 +2781,27 @@ export default function Dashboard({ token, user, onLogout }) {
                 </div>
               </div>
             ))}
-            <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelected} />
-            <div className="pm-btn-ghost" style={{ marginTop: 8, width: "fit-content" }} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-              <Upload size={13} /> {uploading ? "Uploading…" : "Upload file"}
-            </div>
+            {!isViewer && (
+              <>
+                <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelected} />
+                <div className="pm-btn-ghost" style={{ marginTop: 8, width: "fit-content" }} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
+                  <Upload size={13} /> {uploading ? "Uploading…" : "Upload file"}
+                </div>
+              </>
+            )}
 
             <div className="pm-field-label" style={{ marginTop:14, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
               <span>Links</span>
-              <span
-                style={{ fontSize:11, color:"var(--teal)", cursor:"pointer", fontWeight:600 }}
-                onClick={() => setShowAddLink((v) => !v)}
-              >
-                {showAddLink ? "Cancel" : "+ Add link"}
-              </span>
+              {!isViewer && (
+                <span
+                  style={{ fontSize:11, color:"var(--teal)", cursor:"pointer", fontWeight:600 }}
+                  onClick={() => setShowAddLink((v) => !v)}
+                >
+                  {showAddLink ? "Cancel" : "+ Add link"}
+                </span>
+              )}
             </div>
-            {showAddLink && (
+            {!isViewer && showAddLink && (
               <div style={{ background:"var(--paper-deep)", borderRadius:9, padding:"10px 12px", marginBottom:8 }}>
                 <input
                   placeholder="Link name (e.g. Google Drive folder)"
@@ -2658,14 +2851,16 @@ export default function Dashboard({ token, user, onLogout }) {
                 >
                   🔗 {l.label}
                 </a>
-                <Trash2
-                  size={13}
-                  style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }}
-                  onClick={async () => {
-                    try { await api.deleteLink(token, l.id); setTaskLinks((prev) => prev.filter((x) => x.id !== l.id)); }
-                    catch (err) { setError(err.message); }
-                  }}
-                />
+                {!isViewer && (
+                  <Trash2
+                    size={13}
+                    style={{ cursor:"pointer", color:"var(--muted)", flexShrink:0 }}
+                    onClick={async () => {
+                      try { await api.deleteLink(token, l.id); setTaskLinks((prev) => prev.filter((x) => x.id !== l.id)); }
+                      catch (err) { setError(err.message); }
+                    }}
+                  />
+                )}
               </div>
             ))}
 
@@ -2721,14 +2916,18 @@ export default function Dashboard({ token, user, onLogout }) {
               </button>
             )}
 
-            <div className="pm-comment-add">
-              <input placeholder="Write a comment…" value={newComment} onChange={(e) => setNewComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment()} />
-              <button className="pm-btn-primary" onClick={postComment}>Post</button>
-            </div>
+            {!isViewer && (
+              <div className="pm-comment-add">
+                <input placeholder="Write a comment…" value={newComment} onChange={(e) => setNewComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment()} />
+                <button className="pm-btn-primary" onClick={postComment}>Post</button>
+              </div>
+            )}
 
-            <div className="pm-delete-btn" onClick={() => deleteTask(selectedTask.id)}>
-              <X size={13} /> Delete task
-            </div>
+            {!isViewer && (
+              <div className="pm-delete-btn" onClick={() => deleteTask(selectedTask.id)}>
+                <X size={13} /> Delete task
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2744,6 +2943,7 @@ export default function Dashboard({ token, user, onLogout }) {
           messages={chatMessages}
           open={showChat}
           onToggleOpen={() => setShowChat((v) => !v)}
+          readOnly={isViewer}
           onOpenTask={(taskId) => {
             const t = tasks.find((x) => x.id === taskId);
             if (t) { setSelectedTask(t); setShowChat(false); }

@@ -73,6 +73,8 @@ export const api = {
   listTasks: (token, projectId) => request(`/tasks?projectId=${projectId}`, { token }),
   searchTasks: (token, projectId, q) => request(`/tasks/search?projectId=${projectId}&q=${encodeURIComponent(q)}`, { token }),
   createTask: (token, payload) => request("/tasks", { method: "POST", body: payload, token }),
+  importTasks: (token, projectId, rows) =>
+    request("/tasks/import", { method: "POST", body: { projectId, rows }, token }),
   updateTask: (token, id, patch) => request(`/tasks/${id}`, { method: "PATCH", body: patch, token }),
   deleteTask: (token, id) => request(`/tasks/${id}`, { method: "DELETE", token }),
   taskHistory: (token, taskId) => request(`/tasks/${taskId}/history`, { token }),
@@ -95,8 +97,8 @@ export const api = {
     request("/comments", { method: "POST", body: { taskId, body }, token }),
 
   listMembers: (token, projectId) => request(`/projects/${projectId}/members`, { token }),
-  inviteMember: (token, projectId, email) =>
-    request(`/projects/${projectId}/members`, { method: "POST", body: { email }, token }),
+  inviteMember: (token, projectId, email, role) =>
+    request(`/projects/${projectId}/members`, { method: "POST", body: { email, role }, token }),
   removeMember: (token, projectId, userId) =>
     request(`/projects/${projectId}/members/${userId}`, { method: "DELETE", token }),
   updateMemberRole: (token, projectId, userId, role) =>

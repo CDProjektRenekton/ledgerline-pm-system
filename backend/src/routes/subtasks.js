@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getRole, canWrite } = require("../middleware/permissions");
 const { emitToProject } = require("../socket");
 const { logHistory } = require("../history");
 
@@ -23,6 +24,11 @@ router.post("/", async (req, res) => {
   const { taskId, title, targetAt } = req.body;
   if (!taskId || !title) return res.status(400).json({ error: "taskId and title are required" });
 
+  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
+  if (taskRow.rows.length === 0) return res.status(404).json({ error: "Task not found" });
+  const role = await getRole(taskRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+
   const countResult = await db.query("SELECT COUNT(*) FROM subtasks WHERE task_id = $1", [taskId]);
   const position = Number(countResult.rows[0].count);
 
@@ -31,11 +37,8 @@ router.post("/", async (req, res) => {
     [taskId, title.trim(), position, targetAt || null]
   );
 
-  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
-  if (taskRow.rows.length > 0) {
-    emitToProject(taskRow.rows[0].project_id, "subtask:created", result.rows[0]);
-    await logHistory(taskId, req.user.id, "subtask_added", `${req.user.name} added subtask "${title.trim()}"${targetAt ? ` (target: ${new Date(targetAt).toLocaleString()})` : ""}`);
-  }
+  emitToProject(taskRow.rows[0].project_id, "subtask:created", result.rows[0]);
+  await logHistory(taskId, req.user.id, "subtask_added", `${req.user.name} added subtask "${title.trim()}"${targetAt ? ` (target: ${new Date(targetAt).toLocaleString()})` : ""}`);
   res.status(201).json(result.rows[0]);
 });
 
@@ -48,6 +51,10 @@ router.patch("/:id", async (req, res) => {
   if (existing.rows.length === 0) return res.status(404).json({ error: "Subtask not found" });
   const sub = existing.rows[0];
 
+  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [sub.task_id]);
+  const role = await getRole(taskRow.rows[0]?.project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+
   const result = await db.query(
     `UPDATE subtasks SET
        title = COALESCE($1, title),
@@ -58,7 +65,6 @@ router.patch("/:id", async (req, res) => {
     [title !== undefined ? title.trim() : null, is_done !== undefined ? is_done : null, targetAt || null, "targetAt" in req.body, position !== undefined ? position : null, id]
   );
 
-  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [sub.task_id]);
   if (taskRow.rows.length > 0) {
     emitToProject(taskRow.rows[0].project_id, "subtask:updated", result.rows[0]);
     if (is_done !== undefined && is_done !== sub.is_done) {
@@ -80,6 +86,8 @@ router.delete("/:id", async (req, res) => {
   const { id } = req.params;
   const existing = await db.query("SELECT s.*, t.project_id FROM subtasks s JOIN tasks t ON t.id = s.task_id WHERE s.id = $1", [id]);
   if (existing.rows.length === 0) return res.status(404).json({ error: "Subtask not found" });
+  const role = await getRole(existing.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
   await db.query("DELETE FROM subtasks WHERE id = $1", [id]);
   emitToProject(existing.rows[0].project_id, "subtask:deleted", { id: Number(id), task_id: existing.rows[0].task_id });
   res.json({ ok: true });

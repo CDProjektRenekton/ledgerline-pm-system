@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getRole, canWrite, blockViewerWrites } = require("../middleware/permissions");
 const { emitToProject, emitToUser } = require("../socket");
 const { sendAssignmentEmail, sendStatusChangeEmail } = require("../email");
 const { logHistory } = require("../history");
@@ -10,6 +11,7 @@ router.use(requireAuth);
 
 const STATUSES = ["todo", "inprogress", "review", "done"];
 const PRIORITIES = ["low", "medium", "high"];
+const CATEGORIES = ["simple", "complex"];
 const STATUS_LABEL = { todo: "To Do", inprogress: "In Progress", review: "In Review", done: "Done" };
 
 async function attachLabels(tasks) {
@@ -148,7 +150,7 @@ router.get("/search", async (req, res) => {
 });
 
 // Create a task — assignee can be a single user (assigneeId) OR a team (assigneeTeamId), not both.
-router.post("/", async (req, res) => {
+router.post("/", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
   const { projectId, title, description, priority, assigneeId, assigneeTeamId, dueDate, startDate, category } = req.body;
   if (!projectId || !title) {
     return res.status(400).json({ error: "projectId and title are required" });
@@ -198,7 +200,7 @@ router.get("/:id/history", async (req, res) => {
 });
 
 // Reorder tasks within (or into) a column. Body: { projectId, status, orderedIds: [id, ...] }
-router.post("/reorder", async (req, res) => {
+router.post("/reorder", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
   const { projectId, status, orderedIds } = req.body;
   if (!projectId || !status || !Array.isArray(orderedIds)) {
     return res.status(400).json({ error: "projectId, status, and orderedIds[] are required" });
@@ -229,6 +231,116 @@ router.post("/reorder", async (req, res) => {
   res.json({ ok: true });
 });
 
+// Bulk-import tasks from a parsed CSV/Excel template. Body: { projectId, rows: [...] }.
+// Each row is a plain object with (optional unless noted) fields:
+//   title (required), description, status, priority, category,
+//   assigneeEmail, assigneeTeam, startDate, dueDate,
+//   labels ("comma, separated, names"), subtasks ("Title; Title @ 2026-08-01T09:00")
+// Assignee is resolved by matching assigneeEmail against project members, or
+// assigneeTeam against project teams (team takes precedence if both given).
+// Unresolvable assignees/teams don't fail the row — the task is created
+// unassigned with a warning instead, since one bad email shouldn't block an
+// otherwise-good bulk import.
+router.post("/import", blockViewerWrites((req) => req.body.projectId), async (req, res) => {
+  const { projectId, rows } = req.body;
+  if (!projectId || !Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: "projectId and a non-empty rows array are required" });
+  }
+  if (rows.length > 500) {
+    return res.status(400).json({ error: "Import is limited to 500 rows at a time — split your file and try again" });
+  }
+
+  const memberRows = await db.query(
+    `SELECT u.id, u.email FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = $1`,
+    [projectId]
+  );
+  const memberByEmail = new Map(memberRows.rows.map((m) => [m.email.toLowerCase(), m.id]));
+
+  const teamRows = await db.query(`SELECT id, name FROM teams WHERE project_id = $1`, [projectId]);
+  const teamByName = new Map(teamRows.rows.map((t) => [t.name.toLowerCase(), t.id]));
+
+  const created = [];
+  const errors = [];
+  const warnings = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    const rowNum = i + 2; // header occupies row 1 in the spreadsheet
+    try {
+      const title = String(row.title || "").trim();
+      if (!title) { errors.push({ row: rowNum, message: "Title is required" }); continue; }
+
+      const status = STATUSES.includes(row.status) ? row.status : "todo";
+      const priority = PRIORITIES.includes(row.priority) ? row.priority : "medium";
+      const category = CATEGORIES.includes(row.category) ? row.category : "simple";
+
+      let assigneeId = null;
+      let assigneeTeamId = null;
+      const assigneeTeamRaw = String(row.assigneeTeam || "").trim();
+      const assigneeEmailRaw = String(row.assigneeEmail || "").trim();
+      if (assigneeTeamRaw) {
+        assigneeTeamId = teamByName.get(assigneeTeamRaw.toLowerCase()) || null;
+        if (!assigneeTeamId) warnings.push({ row: rowNum, message: `Team "${assigneeTeamRaw}" not found — left unassigned` });
+      } else if (assigneeEmailRaw) {
+        assigneeId = memberByEmail.get(assigneeEmailRaw.toLowerCase()) || null;
+        if (!assigneeId) warnings.push({ row: rowNum, message: `No project member with email "${assigneeEmailRaw}" — left unassigned` });
+      }
+
+      const startDate = String(row.startDate || "").trim() || null;
+      const dueDate = String(row.dueDate || "").trim() || null;
+
+      const result = await db.query(
+        `INSERT INTO tasks (project_id, title, description, status, priority, assignee_id, assignee_team_id, start_date, due_date, category)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [projectId, title, String(row.description || ""), status, priority, assigneeId, assigneeTeamId, startDate, dueDate, category]
+      );
+      const task = result.rows[0];
+
+      const labelNames = String(row.labels || "").split(",").map((s) => s.trim()).filter(Boolean);
+      for (const name of labelNames) {
+        const labelResult = await db.query(
+          `INSERT INTO labels (project_id, name) VALUES ($1, $2)
+           ON CONFLICT (project_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
+          [projectId, name]
+        );
+        await db.query(
+          `INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [task.id, labelResult.rows[0].id]
+        );
+      }
+
+      const subtaskEntries = String(row.subtasks || "").split(";").map((s) => s.trim()).filter(Boolean);
+      for (let pos = 0; pos < subtaskEntries.length; pos++) {
+        const [subTitleRaw, targetRaw] = subtaskEntries[pos].split("@").map((s) => (s || "").trim());
+        if (!subTitleRaw) continue;
+        await db.query(
+          `INSERT INTO subtasks (task_id, title, position, target_at) VALUES ($1,$2,$3,$4)`,
+          [task.id, subTitleRaw, pos, targetRaw || null]
+        );
+      }
+
+      await logHistory(task.id, req.user.id, "created", `${req.user.name} imported this task`);
+      created.push(task);
+    } catch (err) {
+      errors.push({ row: rowNum, message: err.message || "Failed to create this row" });
+    }
+  }
+
+  if (created.length > 0) {
+    emitToProject(projectId, "tasks:imported", { count: created.length });
+  }
+
+  const fullCreated = await attachSubtasks(await attachLabels(created));
+  res.status(201).json({
+    createdCount: created.length,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    errors,
+    warnings,
+    tasks: fullCreated,
+  });
+});
+
 // Update a task. Reads the existing row first so that an explicit `null`
 // (e.g. unassigning) can be told apart from "field not included in this request".
 router.patch("/:id", async (req, res) => {
@@ -245,6 +357,10 @@ router.patch("/:id", async (req, res) => {
   const existingResult = await db.query("SELECT * FROM tasks WHERE id = $1", [id]);
   if (existingResult.rows.length === 0) return res.status(404).json({ error: "Task not found" });
   const existing = existingResult.rows[0];
+
+  const role = await getRole(existing.project_id, req.user.id);
+  if (!role) return res.status(403).json({ error: "You are not a member of this project" });
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
 
   const next = {
     title: "title" in body ? body.title : existing.title,
@@ -367,17 +483,23 @@ router.patch("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
   const existing = await db.query("SELECT project_id FROM tasks WHERE id = $1", [id]);
+  if (existing.rows.length === 0) return res.status(404).json({ error: "Task not found" });
+  const role = await getRole(existing.rows[0].project_id, req.user.id);
+  if (!role) return res.status(403).json({ error: "You are not a member of this project" });
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+
   const result = await db.query("DELETE FROM tasks WHERE id = $1 RETURNING id", [id]);
-  if (result.rows.length === 0) return res.status(404).json({ error: "Task not found" });
-  if (existing.rows.length > 0) {
-    emitToProject(existing.rows[0].project_id, "task:deleted", { id: Number(id) });
-  }
+  emitToProject(existing.rows[0].project_id, "task:deleted", { id: Number(id) });
   res.json({ ok: true });
 });
 
 // Attach / detach labels
 router.post("/:id/labels/:labelId", async (req, res) => {
   const { id, labelId } = req.params;
+  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [id]);
+  if (taskRow.rows.length === 0) return res.status(404).json({ error: "Task not found" });
+  const role = await getRole(taskRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
   await db.query(
     `INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [id, labelId]
@@ -387,6 +509,10 @@ router.post("/:id/labels/:labelId", async (req, res) => {
 
 router.delete("/:id/labels/:labelId", async (req, res) => {
   const { id, labelId } = req.params;
+  const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [id]);
+  if (taskRow.rows.length === 0) return res.status(404).json({ error: "Task not found" });
+  const role = await getRole(taskRow.rows[0].project_id, req.user.id);
+  if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
   await db.query(`DELETE FROM task_labels WHERE task_id = $1 AND label_id = $2`, [id, labelId]);
   res.json({ ok: true });
 });

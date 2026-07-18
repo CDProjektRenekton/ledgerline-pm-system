@@ -21,7 +21,7 @@ function renderBody(body) {
   });
 }
 
-export default function ChatPanel({ token, project, currentUser, members, tasks, messages: initialMessages = [], open, onToggleOpen, onOpenTask }) {
+export default function ChatPanel({ token, project, currentUser, members, tasks, messages: initialMessages = [], open, onToggleOpen, onOpenTask, readOnly = false }) {
   const [messages, setMessages] = useState([]);
   const [body, setBody] = useState("");
   const [selectedTaskRef, setSelectedTaskRef] = useState(null);
@@ -263,6 +263,11 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
 
           {error && <div className="chat-error">{error}</div>}
 
+          {readOnly ? (
+            <div className="chat-input-area" style={{ fontSize: 12.5, color: "var(--muted, #6B92AD)", textAlign: "center", padding: "10px 6px" }}>
+              You have view-only access to this project.
+            </div>
+          ) : (
           <div className="chat-input-area" style={{ position:"relative" }}>
             {showTaskPicker && (
               <div className="chat-picker">
@@ -358,6 +363,7 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
               </button>
             </div>
           </div>
+          )}
         </div>
       )}
 

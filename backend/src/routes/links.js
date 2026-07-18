@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { getRole, canWrite } = require("../middleware/permissions");
 const { logHistory } = require("../history");
 
 const router = express.Router();
@@ -29,6 +30,11 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "taskId, label, and url are required" });
   }
   try {
+    const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [taskId]);
+    if (taskRow.rows.length === 0) return res.status(404).json({ error: "Task not found" });
+    const role = await getRole(taskRow.rows[0].project_id, req.user.id);
+    if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
+
     const safeUrl = url.startsWith("http") ? url : `https://${url}`;
     const result = await db.query(
       "INSERT INTO task_links (task_id, label, url, created_by) VALUES ($1,$2,$3,$4) RETURNING *",
@@ -48,6 +54,9 @@ router.delete("/:id", async (req, res) => {
     const existing = await db.query("SELECT * FROM task_links WHERE id = $1", [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: "Link not found" });
     const link = existing.rows[0];
+    const taskRow = await db.query("SELECT project_id FROM tasks WHERE id = $1", [link.task_id]);
+    const role = await getRole(taskRow.rows[0]?.project_id, req.user.id);
+    if (!canWrite(role)) return res.status(403).json({ error: "Viewers can view this project but can't make changes to it" });
     await db.query("DELETE FROM task_links WHERE id = $1", [req.params.id]);
     logHistory(link.task_id, req.user.id, "link_removed", `${req.user.name} removed link "${link.label}"`).catch((e) => console.error("logHistory failed:", e.message));
     res.json({ ok: true });

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, useEffect } from "react";
+import React, { useMemo, useRef } from "react";
 
 const STATUS_COLOR = { todo: "#6B92AD", inprogress: "#1A7FA8", review: "#F59E0B", done: "#10B981" };
 const SUBTASK_COLOR = "#8B5CF6";
@@ -17,24 +17,19 @@ export default function TimelineView({ tasks, onSelect }) {
   const dated = tasks.filter((t) => t.due_date);
   const scrollRef = useRef(null);
 
-  // The two previous fixes assumed the browser's flex sizing algorithm would
-  // clip the oversized table correctly, and it didn't. Rather than guess at
-  // CSS box-model behavior a third time, measure the real available width in
-  // JavaScript and force the scroll container to that exact pixel value —
-  // this can't be ambiguous the way CSS flex/grid sizing rules can be.
-  // ".pm-main" is the one ancestor already proven to have a correctly
-  // bounded width (Kanban's board scrolls fine inside it), so it's the
-  // reliable thing to measure against.
-  const [wrapWidth, setWrapWidth] = useState(null);
-  useEffect(() => {
-    const mainEl = scrollRef.current?.closest(".pm-main");
-    if (!mainEl) return;
-    const measure = () => setWrapWidth(mainEl.getBoundingClientRect().width);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(mainEl);
-    return () => ro.disconnect();
-  }, []);
+  // ROOT CAUSE (confirmed with a real browser, not just CSS-theory tracing):
+  // .pm-tl-table is a block-level `display:grid` box, so its own width
+  // resolves to fill its containing block (.pm-tlwrap's content width) —
+  // NOT the sum of its explicit grid-template-columns tracks. Combined with
+  // this element's own `overflow:hidden` (kept for the rounded corners),
+  // every day-column beyond that shrunk width was being clipped and
+  // silently discarded before it ever reached .pm-tlwrap's scrollable area
+  // — so .pm-tlwrap's scrollWidth == clientWidth and there was nothing to
+  // scroll to, no matter what the buttons or ResizeObserver-based width did.
+  // Fix is the `width: max-content` rule on .pm-tl-table below: it forces
+  // the table's own box to size to its explicit column tracks, so it
+  // properly overflows .pm-tlwrap (which already has overflow-x:auto), and
+  // plain scrollLeft/scrollTo/scrollBy calls now reach the true full width.
 
   const { rangeStart, totalDays } = useMemo(() => {
     if (dated.length === 0) {
@@ -82,7 +77,7 @@ export default function TimelineView({ tasks, onSelect }) {
         .pm-tl-navbtn:hover { background:var(--paper-deep); }
         .pm-tl-navlabel { font-size:11.5px; color:var(--muted); }
         .pm-tlwrap { padding: 14px 28px 22px; overflow-x: auto; overflow-y: hidden; flex: 1; min-width: 0; box-sizing: border-box; }
-        .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; }
+        .pm-tl-table { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); min-width: 900px; width: max-content; }
         .pm-tl-rowlabel { padding: 9px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; cursor: pointer; gap: 3px; min-height: 48px; position: sticky; left: 0; background: var(--card); z-index: 2; }
         .pm-tl-rowlabel:hover { background: #F4FAFE; }
         .pm-tl-track { position: relative; border-bottom: 1px solid var(--border); display: grid; min-height: 48px; }
@@ -118,7 +113,6 @@ export default function TimelineView({ tasks, onSelect }) {
       <div
         className="pm-tlwrap"
         ref={scrollRef}
-        style={wrapWidth ? { width: `${wrapWidth}px`, maxWidth: `${wrapWidth}px` } : undefined}
       >
       <div className="pm-tl-table" style={{ gridTemplateColumns: `220px repeat(${totalDays}, 36px)` }}>
         <div className="pm-tl-headlabel">Task</div>

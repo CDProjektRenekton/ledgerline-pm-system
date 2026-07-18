@@ -8,6 +8,7 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
   const [newTeamName, setNewTeamName] = useState("");
   const [addingTo, setAddingTo] = useState(null); // team id currently showing the "add member" select
   const [error, setError] = useState("");
+  const isViewerRole = project.my_role === "viewer";
 
   const createTeam = async () => {
     if (!newTeamName.trim()) return;
@@ -91,7 +92,7 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
                   <span className="pm-team-swatch" style={{ background: t.color }} />
                   {t.name}
                 </div>
-                <Trash2 size={14} className="pm-team-del" onClick={() => removeTeam(t.id)} />
+                {!isViewerRole && <Trash2 size={14} className="pm-team-del" onClick={() => removeTeam(t.id)} />}
               </div>
 
               <div className="pm-team-members">
@@ -99,7 +100,7 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
                   <div className="pm-team-member-chip" key={m.id}>
                     <span className="pm-chip-avatar" style={{ background: m.color }}>{m.initials}</span>
                     {m.name.split(" ")[0]}
-                    <X size={11} className="pm-chip-remove" onClick={() => removeMember(t.id, m.id)} />
+                    {!isViewerRole && <X size={11} className="pm-chip-remove" onClick={() => removeMember(t.id, m.id)} />}
                   </div>
                 ))}
                 {t.members.length === 0 && (
@@ -107,7 +108,7 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
                 )}
               </div>
 
-              {addingTo === t.id ? (
+              {!isViewerRole && (addingTo === t.id ? (
                 <select
                   className="pm-team-add-select"
                   autoFocus
@@ -126,11 +127,12 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
                     <UserPlus size={12} /> Add member
                   </div>
                 )
-              )}
+              ))}
             </div>
           );
         })}
 
+        {!isViewerRole && (
         <div className="pm-new-team-row">
           <input
             placeholder="New team name…"
@@ -142,6 +144,7 @@ export default function TeamsPanel({ token, project, members, teams, onTeamsChan
             <Plus size={14} /> Create
           </button>
         </div>
+        )}
       </div>
     </div>
   );

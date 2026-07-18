@@ -144,7 +144,7 @@ router.post("/:id/members", requireRole("admin", "owner"), async (req, res) => {
       return res.status(409).json({ error: "This person is already a member of the project" });
     }
 
-    const allowedRole = req.projectRole === "owner" ? (role || "member") : "member";
+    const allowedRole = req.projectRole === "owner" ? (role || "contributor") : "contributor";
 
     const inviteResult = await db.query(
       `INSERT INTO project_invites (project_id, user_id, invited_by, role, status)
@@ -173,7 +173,7 @@ router.post("/:id/members", requireRole("admin", "owner"), async (req, res) => {
 router.patch("/:id/members/:userId/role", requireRole("owner"), async (req, res) => {
   const { id, userId } = req.params;
   const { role } = req.body;
-  const VALID_ROLES = ["owner", "admin", "member"];
+  const VALID_ROLES = ["owner", "admin", "contributor", "viewer"];
   if (!role || !VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: `role must be one of ${VALID_ROLES.join(", ")}` });
   }

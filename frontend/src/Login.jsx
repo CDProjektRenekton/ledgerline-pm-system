@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { api, setToken } from "./api";
 
-const LOGO_HORIZ = "https://i.ibb.co/KjjLW3nt/mwss-logo-horiz-flat-01.png";
+const LOGO_HORIZ = "https://i.ibb.co/cKkpkNBj/Horizontal-White.png";
 
 function EyeIcon({ open }) {
   return open ? (
