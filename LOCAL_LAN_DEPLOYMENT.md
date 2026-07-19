@@ -66,7 +66,13 @@ cd backend && npm install
 cd ../frontend && npm install && npm run build
 ```
 
-That's it — **do not set `VITE_API_BASE`** for this setup. Leaving it unset is intentional: the backend now automatically serves the built frontend from the same process, and the app figures out its own address from whatever URL it was opened at. This means the same build works no matter what LAN IP the server ends up with — no rebuilding if the address ever changes.
+Apply the database schema (safe to re-run any time, including after future updates — it only adds what's missing):
+```bash
+cd ../backend
+node src/migrate.js
+```
+
+That's it for configuration — **do not set `VITE_API_BASE`** for this setup. Leaving it unset is intentional: the backend now automatically serves the built frontend from the same process, and the app figures out its own address from whatever URL it was opened at. This means the same build works no matter what LAN IP the server ends up with — no rebuilding if the address ever changes.
 
 ---
 
@@ -126,21 +132,41 @@ http://192.168.1.50:4000
 
 ---
 
+## Where uploaded files live
+
+Task attachments and profile avatars are **not** stored in the database —
+they're saved as plain files on this machine's disk, at:
+```
+backend/uploads/
+```
+This folder is created automatically the first time someone uploads a
+file. It's just as important as the database — losing it means every
+attachment and avatar becomes a broken link, even though the task/comment
+records referencing them are still intact in Postgres. Back it up
+alongside the database (see below), and if you ever move the app to a new
+machine, copy this folder over along with your `pg_dump`.
+
 ## Backups (still important, even locally)
 
-A single machine has no redundancy — if its disk fails, everything is lost unless you're backing up elsewhere. Set up a nightly dump:
+A single machine has no redundancy — if its disk fails, everything is lost
+unless you're backing up elsewhere. Back up **both** the database and the
+uploads folder every night:
 
 **Linux/Mac** — add to `crontab -e`:
 ```
 0 2 * * * docker exec pm_system_db pg_dump -U postgres pm_system > /path/to/backups/pm_system_$(date +\%F).sql
+0 2 * * * tar -czf /path/to/backups/uploads_$(date +\%F).tar.gz -C /path/to/pm-system/backend uploads
 ```
 
 **Windows** — use Task Scheduler to run a `.bat` file nightly containing:
 ```
-docker exec pm_system_db pg_dump -U postgres pm_system > C:\backups\pm_system_%date:~-4%-%date:~3,2%-%date:~0,2%.sql
+docker exec pm_system_db pg_dump -U postgres pm_system > C:\backups\pm_system_%date:~-4%-%date:~3,2%-%date:~0,2%.bat
+powershell Compress-Archive -Path C:\path\to\pm-system\backend\uploads -DestinationPath C:\backups\uploads_%date:~-4%-%date:~3,2%-%date:~0,2%.zip -Force
 ```
 
-Periodically copy these backup files to a USB drive, another computer, or a free-tier cloud storage folder (Google Drive, OneDrive) so you're protected even if the server machine itself is lost or damaged.
+Periodically copy both sets of backup files to a USB drive, another
+computer, or a free-tier cloud storage folder (Google Drive, OneDrive) so
+you're protected even if the server machine itself is lost or damaged.
 
 ---
 
