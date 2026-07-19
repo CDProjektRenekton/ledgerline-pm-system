@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { X, Send, AtSign, Hash, Paperclip, Link, ChevronDown, ChevronUp } from "lucide-react";
 import { api, API_ORIGIN } from "./api";
 
+const CHAT_TEXTAREA_MAX_HEIGHT = 160; // px — grows up to this, then scrolls internally
+
 function timeAgo(dateStr) {
   const s = Math.floor((Date.now() - new Date(dateStr)) / 1000);
   if (s < 60) return "just now";
@@ -135,6 +137,17 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
     else { setShowMentionPicker(false); setMentionQuery(""); }
   };
 
+  // Grows the composer with the message — one line by default, expanding up
+  // to CHAT_TEXTAREA_MAX_HEIGHT as more text/lines are typed, then scrolling
+  // internally past that. Runs after `body` updates (including the
+  // programmatic updates from @mentions, #task refs, and clearing on send).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, CHAT_TEXTAREA_MAX_HEIGHT) + "px";
+  }, [body]);
+
   const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(mentionQuery) && m.id !== currentUser.id);
 
   // Parse embedded links from message body: [label](url) → clickable
@@ -199,7 +212,7 @@ export default function ChatPanel({ token, project, currentUser, members, tasks,
         .chat-link-input { border:1.5px solid #C5DFF0; border-radius:7px; padding:6px 9px; font-size:12.5px; font-family:inherit; outline:none; }
         .chat-link-input:focus { border-color:#1A7FA8; }
         .chat-row { display:flex; gap:7px; align-items:flex-end; }
-        .chat-textarea { flex:1; border:1.5px solid #C5DFF0; border-radius:10px; padding:8px 11px; font-size:13px; font-family:inherit; resize:none; outline:none; min-height:38px; max-height:90px; transition:border-color .15s; }
+        .chat-textarea { flex:1; border:1.5px solid #C5DFF0; border-radius:10px; padding:10px 12px; font-size:13.5px; line-height:1.45; font-family:inherit; resize:none; outline:none; min-height:44px; max-height:160px; overflow-y:auto; transition:border-color .15s, height .1s ease-out; }
         .chat-textarea:focus { border-color:#1A7FA8; }
         .chat-send-btn { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#1A7FA8,#0B4F6C); border:none; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
         .chat-send-btn:disabled { opacity:.5; cursor:not-allowed; }

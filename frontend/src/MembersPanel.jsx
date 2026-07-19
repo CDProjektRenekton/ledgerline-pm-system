@@ -7,14 +7,15 @@ export default function MembersPanel({ token, project, members, currentUser, onM
   const [inviteRole, setInviteRole] = useState("contributor");
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [pending, setPending] = useState([]); // people selected but not yet invited — [{ id?, email, name, initials, color }]
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
-  const blurTimeout = useRef(null);
   const isOwner = project.my_role === "owner";
   const isViewerRole = project.my_role === "viewer";
 
   const ROLE_LABEL = { owner: "Owner", admin: "Admin", contributor: "Contributor", viewer: "Viewer" };
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   // Debounced autocomplete as the user types a name or email
   useEffect(() => {
@@ -25,29 +26,74 @@ export default function MembersPanel({ token, project, members, currentUser, onM
     const t = setTimeout(async () => {
       try {
         const results = await api.searchUsers(token, inviteQuery.trim());
-        // Don't suggest people who are already members
+        // Don't suggest people who are already members or already selected
         const memberIds = new Set(members.map((m) => m.id));
-        setSuggestions(results.filter((u) => !memberIds.has(u.id)));
+        const pendingEmails = new Set(pending.map((p) => p.email.toLowerCase()));
+        setSuggestions(results.filter((u) => !memberIds.has(u.id) && !pendingEmails.has(u.email.toLowerCase())));
       } catch (_) {}
     }, 250);
     return () => clearTimeout(t);
-  }, [inviteQuery, token, members]);
+  }, [inviteQuery, token, members, pending]);
 
-  const sendInvite = async (emailOverride) => {
-    const email = (emailOverride || inviteQuery).trim();
-    if (!email) return;
+  // Adds a person to the pending selection (like CC'ing an email) — nothing
+  // is actually invited until the Invite button is pressed.
+  const addPending = (person) => {
+    setError("");
+    setPending((prev) => {
+      if (prev.some((p) => p.email.toLowerCase() === person.email.toLowerCase())) return prev;
+      return [...prev, person];
+    });
+    setInviteQuery("");
+    setSuggestions([]);
+    setShowSuggestions(false);
+  };
+
+  const removePending = (email) => {
+    setPending((prev) => prev.filter((p) => p.email.toLowerCase() !== email.toLowerCase()));
+  };
+
+  // Enter (or comma) on the search box adds whatever's typed — either the
+  // top matching suggestion, or the raw text itself if it looks like an
+  // email (so you can invite someone who isn't registered yet).
+  const handleInputKeyDown = (e) => {
+    if (e.key !== "Enter" && e.key !== ",") return;
+    e.preventDefault();
+    const typed = inviteQuery.trim().replace(/,$/, "");
+    if (!typed) return;
+    if (suggestions.length > 0) {
+      addPending(suggestions[0]);
+      return;
+    }
+    if (EMAIL_RE.test(typed)) {
+      addPending({ email: typed, name: typed, initials: "?", color: "#6B92AD" });
+    } else {
+      setError("Enter a valid email address, or pick someone from the suggestions.");
+    }
+  };
+
+  const sendInvites = async () => {
+    if (pending.length === 0) return;
     setError(""); setInfo(""); setBusy(true);
-    try {
-      const res = await api.inviteMember(token, project.id, email, isOwner ? inviteRole : "contributor");
-      setInviteQuery("");
-      setSuggestions([]);
-      setShowSuggestions(false);
-      setInfo(res.pending ? "Invitation sent — they'll need to accept it." : "Member added.");
+    const failures = [];
+    let successCount = 0;
+    for (const person of pending) {
+      try {
+        await api.inviteMember(token, project.id, person.email, isOwner ? inviteRole : "contributor");
+        successCount++;
+      } catch (err) {
+        failures.push(`${person.email}: ${err.message}`);
+      }
+    }
+    setBusy(false);
+    if (successCount > 0) {
+      setInfo(`${successCount} invitation${successCount === 1 ? "" : "s"} sent — they'll need to accept ${successCount === 1 ? "it" : "them"}.`);
       onMembersChanged();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
+    }
+    if (failures.length > 0) {
+      setError(failures.join(" · "));
+      setPending((prev) => prev.filter((p) => failures.some((f) => f.startsWith(p.email))));
+    } else {
+      setPending([]);
     }
   };
 
@@ -74,7 +120,7 @@ export default function MembersPanel({ token, project, members, currentUser, onM
     <div className="pm-overlay" onClick={onClose}>
       <div className="pm-members-modal" onClick={(e) => e.stopPropagation()}>
         <style>{`
-          .pm-members-modal { width: 420px; max-width: 92vw; max-height: 85vh; overflow-y: auto; background: var(--card); border-radius: 14px; padding: 22px 24px; margin: auto; }
+          .pm-members-modal { width: 500px; max-width: 92vw; max-height: 85vh; overflow-y: auto; background: var(--card); border-radius: 14px; padding: 26px 28px; margin: auto; }
           .pm-members-head { display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px; }
           .pm-members-title { font-family:'Merriweather', serif; font-size: 19px; font-weight: 700; color: var(--teal-deep); }
           .pm-members-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 16px; }
@@ -101,6 +147,11 @@ export default function MembersPanel({ token, project, members, currentUser, onM
           .pm-invite-suggestion-info { flex:1; min-width:0; }
           .pm-invite-suggestion-name { font-size:13px; font-weight:600; }
           .pm-invite-suggestion-email { font-size:11px; color: var(--muted); }
+          .pm-pending-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+          .pm-pending-chip { display:flex; align-items:center; gap:6px; background: var(--paper-deep); border: 1px solid var(--border); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12px; }
+          .pm-pending-chip-avatar { width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:9px; font-weight:700; flex-shrink:0; }
+          .pm-pending-chip-remove { cursor:pointer; color: var(--muted); display:flex; }
+          .pm-pending-chip-remove:hover { color:#DC2626; }
         `}</style>
 
         <div className="pm-members-head">
@@ -108,7 +159,7 @@ export default function MembersPanel({ token, project, members, currentUser, onM
           <X size={18} style={{ cursor: "pointer", color: "var(--muted)" }} onClick={onClose} />
         </div>
         <div className="pm-members-sub">
-          Search by name or email — they'll get an invite to accept before joining.
+          Search by name or email, select everyone you want to add — like CC'ing an email — then press Invite to send them all at once.
         </div>
 
         {members.map((m) => (
@@ -145,10 +196,21 @@ export default function MembersPanel({ token, project, members, currentUser, onM
 
         {!isViewerRole && (
         <div className="pm-invite-wrap">
+          {pending.length > 0 && (
+            <div className="pm-pending-chips">
+              {pending.map((p) => (
+                <div className="pm-pending-chip" key={p.email}>
+                  <span className="pm-pending-chip-avatar" style={{ background: p.color }}>{p.initials}</span>
+                  {p.name}
+                  <X size={12} className="pm-pending-chip-remove" onClick={() => removePending(p.email)} />
+                </div>
+              ))}
+            </div>
+          )}
           {showSuggestions && suggestions.length > 0 && (
             <div className="pm-invite-suggestions">
               {suggestions.map((u) => (
-                <div key={u.id} className="pm-invite-suggestion" onMouseDown={() => sendInvite(u.email)}>
+                <div key={u.id} className="pm-invite-suggestion" onMouseDown={() => addPending(u)}>
                   <div className="pm-member-avatar" style={{ background: u.color, width: 26, height: 26, fontSize: 10 }}>{u.initials}</div>
                   <div className="pm-invite-suggestion-info">
                     <div className="pm-invite-suggestion-name">{u.name}</div>
@@ -163,11 +225,11 @@ export default function MembersPanel({ token, project, members, currentUser, onM
               <Search size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
               <input
                 style={{ paddingLeft: 30, width: "100%" }}
-                placeholder="Search name or email…"
+                placeholder="Search name or email, press Enter to select…"
                 value={inviteQuery}
                 onChange={(e) => { setInviteQuery(e.target.value); setShowSuggestions(true); }}
                 onFocus={() => setShowSuggestions(true)}
-                onKeyDown={(e) => e.key === "Enter" && sendInvite()}
+                onKeyDown={handleInputKeyDown}
               />
             </div>
             {isOwner && (
@@ -175,15 +237,15 @@ export default function MembersPanel({ token, project, members, currentUser, onM
                 className="pm-invite-role-select"
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value)}
-                title="Role to invite this person as"
+                title="Role to invite everyone selected as"
               >
                 <option value="admin">Admin</option>
                 <option value="contributor">Contributor</option>
                 <option value="viewer">Viewer</option>
               </select>
             )}
-            <button className="pm-btn-primary" onClick={() => sendInvite()} disabled={busy}>
-              <UserPlus size={14} /> Invite
+            <button className="pm-btn-primary" onClick={sendInvites} disabled={busy || pending.length === 0}>
+              <UserPlus size={14} /> Invite{pending.length > 0 ? ` (${pending.length})` : ""}
             </button>
           </div>
         </div>
