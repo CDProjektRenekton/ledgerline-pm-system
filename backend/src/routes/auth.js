@@ -154,6 +154,9 @@ router.post("/resend-verification", requireAuth, async (req, res) => {
 });
 
 // ----- Login -----
+const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
+const LOGIN_LOCKOUT_MINUTES = Number(process.env.LOGIN_LOCKOUT_MINUTES || 15);
+
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
@@ -162,10 +165,41 @@ router.post("/login", async (req, res) => {
   try {
     const result = await db.query("SELECT * FROM users WHERE email = $1", [email.toLowerCase()]);
     const user = result.rows[0];
+    // Same generic message whether the email doesn't exist or the password
+    // is wrong — don't let a login form reveal which emails are registered.
     if (!user) return res.status(401).json({ error: "Invalid email or password" });
 
+    if (user.is_active === false) {
+      return res.status(403).json({ error: "This account has been deactivated." });
+    }
+
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const minutesLeft = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
+      return res.status(429).json({
+        error: `Too many failed attempts. Try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
+      });
+    }
+
     const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: "Invalid email or password" });
+    if (!valid) {
+      const attempts = (user.failed_login_attempts || 0) + 1;
+      const shouldLock = attempts >= LOGIN_MAX_ATTEMPTS;
+      await db.query(
+        "UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3",
+        [attempts, shouldLock ? new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60000) : null, user.id]
+      );
+      if (shouldLock) {
+        return res.status(429).json({
+          error: `Too many failed attempts. Try again in ${LOGIN_LOCKOUT_MINUTES} minutes.`,
+        });
+      }
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    // Successful login clears any prior failed-attempt count/lockout.
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      await db.query("UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1", [user.id]);
+    }
 
     const token = signToken(user);
     res.json({ token, user: publicUser(user) });
@@ -246,7 +280,14 @@ router.get("/search-users", requireAuth, async (req, res) => {
 });
 
 // ----- Upload avatar -----
-router.post("/avatar", requireAuth, uploadAvatar.single("avatar"), async (req, res) => {
+function handleAvatarUpload(req, res, next) {
+  uploadAvatar.single("avatar")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}
+
+router.post("/avatar", requireAuth, handleAvatarUpload, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No image file uploaded" });
   const avatarUrl = `/uploads/avatars/${req.file.filename}`;
   await db.query("UPDATE users SET avatar_url = $1 WHERE id = $2", [avatarUrl, req.user.id]);

@@ -20,9 +20,28 @@ const storage = multer.diskStorage({
     cb(null, `${unique}${path.extname(file.originalname)}`);
   },
 });
+
+// Allowlist rather than blocklist — safer for a tool that will be reachable
+// from the internet, since a blocklist only stops the dangerous extensions
+// someone thought to list. Covers what an office actually attaches to tasks:
+// documents, spreadsheets, presentations, images, PDFs, and plain archives.
+// Macro-enabled Office formats (.docm/.xlsm/.pptm) are deliberately excluded.
+const ALLOWED_EXTENSIONS = new Set([
+  ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".csv",
+  ".xls", ".xlsx", ".ods",
+  ".ppt", ".pptx", ".odp",
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp",
+  ".zip", ".rar", ".7z",
+]);
+
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_EXTENSIONS.has(ext)) cb(null, true);
+    else cb(new Error(`"${ext || "that file type"}" isn't an allowed attachment type. Allowed: documents, spreadsheets, presentations, images, PDFs, and zip/rar/7z archives.`));
+  },
 });
 
 router.get("/", async (req, res) => {
@@ -37,7 +56,18 @@ router.get("/", async (req, res) => {
   res.json(result.rows);
 });
 
-router.post("/", upload.single("file"), async (req, res) => {
+// multer calls next(err) on a fileFilter/size-limit rejection, which would
+// otherwise skip straight to the generic global error handler (a plain 500
+// with no useful message). Catch it here so the person actually sees why
+// their upload was rejected.
+function handleUpload(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}
+
+router.post("/", handleUpload, async (req, res) => {
   const { taskId } = req.body;
   if (!taskId || !req.file) {
     return res.status(400).json({ error: "taskId and a file are required" });

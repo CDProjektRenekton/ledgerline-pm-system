@@ -165,6 +165,10 @@ CREATE INDEX IF NOT EXISTS idx_project_invites_user ON project_invites(user_id, 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+-- Login brute-force protection: tracks consecutive failed password attempts
+-- and a temporary lockout window. Reset to 0/NULL on a successful login.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date DATE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'simple';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS search_vector tsvector
