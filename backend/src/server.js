@@ -32,6 +32,7 @@ const teamRoutes = require("./routes/teams");
 const subtaskRoutes = require("./routes/subtasks");
 const messageRoutes = require("./routes/messages");
 const linkRoutes    = require("./routes/links");
+const adminRoutes   = require("./routes/admin");
 const { startScheduler } = require("./jobs/dueDateScheduler");
 const socket = require("./socket");
 
@@ -88,6 +89,7 @@ app.use("/api/teams", teamRoutes);
 app.use("/api/subtasks", subtaskRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/links",    linkRoutes);
+app.use("/api/admin",    adminRoutes);
 
 // --- Optional single-process local deployment ---
 // On Render, frontend and backend run as two separate services, so

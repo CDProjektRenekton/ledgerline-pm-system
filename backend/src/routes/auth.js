@@ -47,7 +47,11 @@ function signToken(user) {
 }
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, initials: u.initials, color: u.color, is_verified: u.is_verified, avatar_url: u.avatar_url || null };
+  return {
+    id: u.id, name: u.name, email: u.email, initials: u.initials, color: u.color,
+    is_verified: u.is_verified, avatar_url: u.avatar_url || null,
+    is_super_admin: !!u.is_super_admin, theme: u.theme || "default",
+  };
 }
 
 // ----- Register -----
@@ -70,7 +74,7 @@ router.post("/register", async (req, res) => {
     const result = await db.query(
       `INSERT INTO users (name, email, password_hash, initials, color, is_verified)
        VALUES ($1, $2, $3, $4, $5, false)
-       RETURNING id, name, email, initials, color, is_verified`,
+       RETURNING id, name, email, initials, color, is_verified, is_super_admin, theme`,
       [name, email.toLowerCase(), passwordHash, initials, color]
     );
     const user = result.rows[0];
@@ -254,7 +258,7 @@ router.post("/reset-password", async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const result = await db.query(
-      "SELECT id, name, email, initials, color, is_verified, avatar_url FROM users WHERE id = $1",
+      "SELECT id, name, email, initials, color, is_verified, avatar_url, is_super_admin, theme FROM users WHERE id = $1",
       [req.user.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: "User not found" });
@@ -312,6 +316,21 @@ router.post("/change-password", requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to change password" });
+  }
+});
+
+// ----- Set my dashboard theme preference -----
+const ALLOWED_THEMES = ["default", "dark", "blue", "yellow", "white"];
+router.patch("/theme", requireAuth, async (req, res) => {
+  const { theme } = req.body;
+  if (!ALLOWED_THEMES.includes(theme))
+    return res.status(400).json({ error: `theme must be one of: ${ALLOWED_THEMES.join(", ")}` });
+  try {
+    await db.query("UPDATE users SET theme = $1 WHERE id = $2", [theme, req.user.id]);
+    res.json({ theme });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update theme preference" });
   }
 });
 

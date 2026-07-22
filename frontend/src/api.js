@@ -121,6 +121,26 @@ export const api = {
     request("/auth/change-password", { method: "POST", body: { currentPassword, newPassword }, token }),
   deactivateAccount: (token) =>
     request("/auth/deactivate", { method: "POST", token }),
+  updateMyTheme: (token, theme) =>
+    request("/auth/theme", { method: "PATCH", body: { theme }, token }),
+
+  // System theme (public read; super-admin write)
+  getSystemTheme: () => request("/admin/system-theme"),
+  updateSystemTheme: (token, theme) =>
+    request("/admin/system-theme", { method: "PUT", body: { theme }, token }),
+  resetSystemTheme: (token) =>
+    request("/admin/system-theme", { method: "DELETE", token }),
+
+  // Super admin — user management
+  adminListUsers: (token) => request("/admin/users", { token }),
+  adminUpdateUser: (token, id, patch) =>
+    request(`/admin/users/${id}`, { method: "PATCH", body: patch, token }),
+  adminResetPassword: (token, id, newPassword) =>
+    request(`/admin/users/${id}/reset-password`, { method: "POST", body: { newPassword }, token }),
+  adminSetActive: (token, id, is_active) =>
+    request(`/admin/users/${id}/active`, { method: "PATCH", body: { is_active }, token }),
+  adminSetSuperAdmin: (token, id, is_super_admin) =>
+    request(`/admin/users/${id}/super-admin`, { method: "PATCH", body: { is_super_admin }, token }),
   uploadAvatar: async (token, file) => {
     const form = new FormData();
     form.append("avatar", file);

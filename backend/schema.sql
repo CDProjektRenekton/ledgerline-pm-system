@@ -222,3 +222,37 @@ UPDATE project_members SET role = 'contributor' WHERE role = 'member';
 UPDATE project_invites SET role = 'contributor' WHERE role = 'member';
 ALTER TABLE project_members ALTER COLUMN role SET DEFAULT 'contributor';
 ALTER TABLE project_invites ALTER COLUMN role SET DEFAULT 'contributor';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Super Admin + per-user/system theming
+-- ─────────────────────────────────────────────────────────────────────────
+-- System-level super admin flag — separate from the per-project owner/admin/
+-- contributor/viewer roles above. A super admin can manage every user
+-- account in the system (reset passwords, deactivate/reactivate, rename,
+-- change login email) and customize the system-wide default theme/colors.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT false;
+
+-- Each user's personal dashboard theme choice ('default' follows whatever
+-- the super admin has set system-wide; otherwise a fixed preset name like
+-- 'dark' / 'blue' / 'yellow' / 'white').
+ALTER TABLE users ADD COLUMN IF NOT EXISTS theme TEXT NOT NULL DEFAULT 'default';
+
+-- Generic key/value store for system-wide settings. Currently holds a single
+-- row (key = 'theme') whose value is a JSON string of the super-admin-set
+-- color palette, applied to every user whose personal theme is 'default'.
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Seed the default Super Admin account once. Login is the literal string
+-- "admin" (stored in the email column — the app never validates email
+-- format, so this is a safe reserved login identifier), default password
+-- "admin" (bcrypt hash below), which can and should be changed after first
+-- login. Idempotent: only inserts if no account with this login exists yet,
+-- so this never overwrites a renamed/repurposed super admin account or
+-- resets a changed password on a later deploy.
+INSERT INTO users (name, email, password_hash, initials, color, is_verified, is_active, is_super_admin)
+VALUES ('Super Admin', 'admin', '$2b$10$NqCnuIyOAunnCnGX6Qs21eTBNsVzZVlXkg3g/QdTvxxz9IUBQSvv6', 'SA', '#0B4F6C', true, true, true)
+ON CONFLICT (email) DO NOTHING;

@@ -39,7 +39,9 @@ import TeamsPanel from "./TeamsPanel.jsx";
 import MembersPanel from "./MembersPanel.jsx";
 import NotificationBell from "./NotificationBell.jsx";
 import ChatPanel from "./ChatPanel.jsx";
+import AdminPanel from "./AdminPanel.jsx";
 import { csvToTaskRows } from "./csv.js";
+import { getThemeVars, THEME_LABELS, THEME_ORDER } from "./themes.js";
 
 const COLUMNS = [
   { id: "todo",       label: "To Do",       no: "01", accent: "#6B92AD" },
@@ -158,6 +160,13 @@ export default function Dashboard({ token, user, onLogout }) {
   const [pendingStatusChange, setPendingStatusChange] = useState(null); // { taskId, status, title }
   // Chat floating widget
   const [chatMinimized, setChatMinimized] = useState(false);
+  // Theming: the system-wide palette (set by a super admin, or null/defaults
+  // if never customized) and this user's own preference ('default' follows
+  // the system palette; otherwise a fixed preset).
+  const [systemTheme, setSystemTheme] = useState(null);
+  const [myTheme, setMyTheme] = useState(user.theme || "default");
+  // Super admin panel
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   // Calendar: click-to-create
   const [calendarNewDate, setCalendarNewDate] = useState(null);
   const newTaskFileRef = useRef(null);
@@ -304,6 +313,11 @@ export default function Dashboard({ token, user, onLogout }) {
       }
     })();
   }, [token]);
+
+  // Load the system-wide theme palette (set by a super admin, if any) once on mount
+  useEffect(() => {
+    api.getSystemTheme().then(setSystemTheme).catch(() => {});
+  }, []);
 
   // Load the notification inbox + counts once on mount
   useEffect(() => {
@@ -1079,8 +1093,10 @@ export default function Dashboard({ token, user, onLogout }) {
   // comments/attachments/links, no chat, no drag-and-drop, no task creation.
   const isViewer = activeProject?.my_role === "viewer";
 
+  const themeVars = getThemeVars(myTheme, systemTheme);
+
   return (
-    <div className="pm-root" onClick={() => { setShowInvites(false); }}>
+    <div className="pm-root" style={themeVars} onClick={() => { setShowInvites(false); }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Merriweather:wght@700&display=swap');
 
@@ -1101,7 +1117,7 @@ export default function Dashboard({ token, user, onLogout }) {
         }
         .pm-serif { font-family: 'Merriweather', serif; }
         .pm-mono { font-family: 'JetBrains Mono', monospace; }
-        .pm-sidebar { width: var(--sidebar-w, 240px); flex-shrink: 0; background: linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%); color: #E8F4FC; display: flex; flex-direction: column; transition: width 0.05s; overflow: hidden; position: relative; }
+        .pm-sidebar { width: var(--sidebar-w, 240px); flex-shrink: 0; background: var(--sidebar-bg, linear-gradient(180deg,#0B4F6C 0%,#1A7FA8 100%)); color: #E8F4FC; display: flex; flex-direction: column; transition: width 0.05s; overflow: hidden; position: relative; }
         .pm-sidebar.collapsed { width: 0 !important; }
         .pm-sidebar-resize { position:absolute; top:0; right:0; width:5px; height:100%; cursor:col-resize; z-index:10; background:transparent; }
         .pm-sidebar-resize:hover { background:rgba(255,255,255,0.18); }
@@ -1284,6 +1300,20 @@ export default function Dashboard({ token, user, onLogout }) {
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap" }}>Project Workspace</div>
           </div>
         </div>
+
+        {/* Super Admin entry point — only visible to super admins */}
+        {user.is_super_admin && (
+          <div style={{ padding: "10px 12px 2px" }}>
+            <div
+              className="pm-proj-item"
+              style={{ background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.3)" }}
+              onClick={() => setShowAdminPanel(true)}
+              title="Super Admin — manage all users and system theme"
+            >
+              <UserCog size={13} /> Super Admin
+            </div>
+          </div>
+        )}
 
         {/* My Projects */}
         {projects.filter((p) => p.my_role === "owner" || p.my_role === "admin").length > 0 && (
@@ -2337,7 +2367,7 @@ export default function Dashboard({ token, user, onLogout }) {
             <div className="pm-modal-body">
               {/* Tab bar */}
               <div style={{ display:"flex", gap:4, marginBottom:20, background:"var(--paper-deep)", borderRadius:10, padding:4 }}>
-                {[["avatar","🖼 Photo"],["password","🔒 Password"],["deactivate","⚠ Deactivate"]].map(([tab,label]) => (
+                {[["avatar","🖼 Photo"],["password","🔒 Password"],["theme","🎨 Theme"],["deactivate","⚠ Deactivate"]].map(([tab,label]) => (
                   <button key={tab} onClick={() => { setProfileTab(tab); setProfileMsg({ type:"", text:"" }); }}
                     style={{ flex:1, padding:"7px 0", fontSize:12, fontWeight:700, border:"none", borderRadius:7, cursor:"pointer",
                       background: profileTab===tab ? "#fff" : "transparent",
@@ -2417,6 +2447,49 @@ export default function Dashboard({ token, user, onLogout }) {
                       }}>
                       Update Password
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {profileTab === "theme" && (
+                <div>
+                  <div style={{ fontSize:12.5, color:"var(--muted)", marginBottom:16, lineHeight:1.6 }}>
+                    Choose how your dashboard looks. <strong>Default</strong> follows whatever
+                    palette the Super Admin has set system-wide.
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    {THEME_ORDER.map((key) => {
+                      const swatchVars = getThemeVars(key, systemTheme) || getThemeVars("blue", systemTheme);
+                      const isActive = myTheme === key;
+                      return (
+                        <div
+                          key={key}
+                          onClick={async () => {
+                            setMyTheme(key);
+                            user.theme = key;
+                            try {
+                              await api.updateMyTheme(token, key);
+                              setProfileMsg({ type:"ok", text:`Theme set to ${THEME_LABELS[key]}.` });
+                            } catch (err) { setProfileMsg({ type:"err", text: err.message }); }
+                          }}
+                          style={{
+                            cursor:"pointer", borderRadius:10, padding:"10px 12px",
+                            border: isActive ? "2px solid var(--teal)" : "1.5px solid var(--border)",
+                            background: swatchVars ? swatchVars["--paper"] : "#fff",
+                          }}
+                        >
+                          <div style={{ display:"flex", gap:5, marginBottom:8 }}>
+                            <div style={{ width:16, height:16, borderRadius:"50%", background: swatchVars ? swatchVars["--teal"] : "#1A7FA8" }} />
+                            <div style={{ width:16, height:16, borderRadius:"50%", background: swatchVars ? swatchVars["--teal-deep"] : "#0B4F6C" }} />
+                            <div style={{ width:16, height:16, borderRadius:"50%", border:"1px solid rgba(0,0,0,0.1)", background: swatchVars ? swatchVars["--card"] : "#fff" }} />
+                          </div>
+                          <div style={{ fontSize:12.5, fontWeight:700, color: swatchVars ? swatchVars["--ink"] : "#0B2233" }}>
+                            {THEME_LABELS[key]}
+                            {isActive && <Check size={12} style={{ marginLeft:6, verticalAlign:"middle", color:"var(--teal)" }} />}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2607,6 +2680,16 @@ export default function Dashboard({ token, user, onLogout }) {
           teams={teams}
           onTeamsChanged={refreshTeams}
           onClose={() => setShowTeamsPanel(false)}
+        />
+      )}
+
+      {showAdminPanel && user.is_super_admin && (
+        <AdminPanel
+          token={token}
+          currentUser={user}
+          systemTheme={systemTheme}
+          onSystemThemeChanged={setSystemTheme}
+          onClose={() => setShowAdminPanel(false)}
         />
       )}
 
