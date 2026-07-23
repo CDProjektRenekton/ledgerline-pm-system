@@ -42,6 +42,7 @@ import ChatPanel from "./ChatPanel.jsx";
 import AdminPanel from "./AdminPanel.jsx";
 import { csvToTaskRows } from "./csv.js";
 import { getThemeVars, THEME_LABELS, THEME_ORDER } from "./themes.js";
+import { toLocalInputValue, fromLocalInputValue } from "./datetime.js";
 
 const COLUMNS = [
   { id: "todo",       label: "To Do",       no: "01", accent: "#6B92AD" },
@@ -725,7 +726,7 @@ export default function Dashboard({ token, user, onLogout }) {
   const addSubtask = async () => {
     if (!newSubtask.trim() || !selectedTask) return;
     try {
-      const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim(), newSubtaskTarget || undefined);
+      const s = await api.createSubtask(token, selectedTask.id, newSubtask.trim(), fromLocalInputValue(newSubtaskTarget));
       setNewSubtask("");
       setNewSubtaskTarget("");
       // Update the panel subtask list directly (don't rely on refreshTasks which
@@ -744,7 +745,7 @@ export default function Dashboard({ token, user, onLogout }) {
   const toggleSubtask = async (id, is_done) => {
     if (is_done) {
       // Show the date-time picker widget instead of window.prompt
-      const defaultDt = new Date().toISOString().slice(0, 16);
+      const defaultDt = toLocalInputValue(new Date());
       setCompletionPicker({ subtaskId: id, value: defaultDt });
     } else {
       setSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, is_done: false } : s)));
@@ -765,7 +766,7 @@ export default function Dashboard({ token, user, onLogout }) {
     if (!completionPicker) return;
     const { subtaskId, value } = completionPicker;
     setCompletionPicker(null);
-    const completedAt = value || new Date().toISOString().slice(0, 16);
+    const completedAt = value ? fromLocalInputValue(value) : new Date().toISOString();
     setSubtasks((prev) => prev.map((s) => (s.id === subtaskId ? { ...s, is_done: true, target_at: completedAt } : s)));
     try {
       const updated = await api.updateSubtask(token, subtaskId, { is_done: true, targetAt: completedAt });
@@ -817,7 +818,7 @@ export default function Dashboard({ token, user, onLogout }) {
     const { id, title, target_at } = editingSubtask;
     setEditingSubtask(null);
     try {
-      const updated = await api.updateSubtask(token, id, { title, targetAt: target_at || undefined });
+      const updated = await api.updateSubtask(token, id, { title, targetAt: target_at ? fromLocalInputValue(target_at) : undefined });
       setSubtasks((prev) => prev.map((s) => s.id === id ? updated : s));
       setTasks((prev) => prev.map((t) =>
         t.subtasks ? { ...t, subtasks: t.subtasks.map((s) => s.id === id ? updated : s) } : t
@@ -1911,7 +1912,7 @@ export default function Dashboard({ token, user, onLogout }) {
                       onChange={(e) => setNewTaskSubInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && newTaskSubInput.trim()) {
-                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: newTaskSubTargetAt }]);
+                          setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: fromLocalInputValue(newTaskSubTargetAt) }]);
                           setNewTaskSubInput(""); setNewTaskSubTargetAt("");
                         }
                       }}
@@ -1931,7 +1932,7 @@ export default function Dashboard({ token, user, onLogout }) {
                         style={{ padding:"7px 14px", fontSize:12.5, whiteSpace:"nowrap" }}
                         onClick={() => {
                           if (newTaskSubInput.trim()) {
-                            setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: newTaskSubTargetAt }]);
+                            setNewTaskSubtasks((prev) => [...prev, { title: newTaskSubInput.trim(), targetAt: fromLocalInputValue(newTaskSubTargetAt) }]);
                             setNewTaskSubInput(""); setNewTaskSubTargetAt("");
                           }
                         }}
@@ -2237,7 +2238,7 @@ export default function Dashboard({ token, user, onLogout }) {
                     onClick={async () => {
                       if (!newSubtask.trim()) return;
                       try {
-                        await api.createSubtask(token, t.id, newSubtask.trim(), newSubtaskTarget || undefined);
+                        await api.createSubtask(token, t.id, newSubtask.trim(), fromLocalInputValue(newSubtaskTarget));
                         setNewSubtask(""); setNewSubtaskTarget("");
                         refreshTasks();
                       } catch (err) { setError(err.message); }
@@ -2764,7 +2765,7 @@ export default function Dashboard({ token, user, onLogout }) {
                         title="Edit subtask"
                         style={{ cursor:"pointer", color:"var(--muted)", opacity:0, transition:"opacity .15s", fontSize:11, marginTop:2 }}
                         className="pm-subtask-edit-btn"
-                        onClick={() => setEditingSubtask({ id: s.id, title: s.title, target_at: s.target_at ? new Date(s.target_at).toISOString().slice(0,16) : "" })}
+                        onClick={() => setEditingSubtask({ id: s.id, title: s.title, target_at: s.target_at ? toLocalInputValue(s.target_at) : "" })}
                       >
                         ✎
                       </span>
