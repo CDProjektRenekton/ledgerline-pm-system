@@ -47,6 +47,18 @@ const app = express();
 // - crossOriginEmbedderPolicy/crossOriginResourcePolicy are relaxed off
 //   helmet's defaults, which would otherwise block those same external
 //   images from loading at all.
+// - upgradeInsecureRequests is explicitly disabled: Helmet adds this CSP
+//   directive by default, which tells the browser to silently retry every
+//   asset over HTTPS instead of HTTP. This app is deployed over plain HTTP
+//   in most setups (LAN IP, Podman/native Windows, no TLS cert) — with the
+//   directive left on, the browser tries HTTPS against a server that only
+//   speaks HTTP, gets a connection reset, and the page renders blank.
+//   Browsers exempt "localhost" from this behavior (treated as a secure
+//   context already), which is why this doesn't show up when testing from
+//   the same machine — only when accessed via a real LAN IP or domain over
+//   plain HTTP. If this app is later served over real HTTPS (e.g. behind
+//   the Cloudflare Tunnel), this directive being off changes nothing, since
+//   there's no insecure HTTP request to "upgrade" in the first place.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -59,6 +71,7 @@ app.use(helmet({
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       frameAncestors: ["'self'"],
+      upgradeInsecureRequests: null,
     },
   },
   crossOriginEmbedderPolicy: false,
