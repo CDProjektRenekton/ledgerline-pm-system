@@ -1,15 +1,15 @@
 const { Pool } = require("pg");
 require("dotenv").config();
+const { resolveSsl } = require("./ssl");
 
 // Render (and most managed Postgres hosts) require SSL on every connection,
 // but a local/Docker Postgres on localhost does not support it.
-// Auto-detect based on the host in DATABASE_URL.
+// See ./ssl.js for the full detection logic (and the DATABASE_SSL override).
 const connectionString = process.env.DATABASE_URL || "";
-const isLocal = /localhost|127\.0\.0\.1/.test(connectionString);
 
 const pool = new Pool({
   connectionString,
-  ssl: isLocal ? false : { rejectUnauthorized: false },
+  ssl: resolveSsl(connectionString),
 });
 
 module.exports = {

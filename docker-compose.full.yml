@@ -1,0 +1,87 @@
+# Full-stack local deployment — Postgres + backend + frontend, all in Docker.
+#
+# This is an ADDITIONAL option alongside the existing docker-compose.yml
+# (which only runs Postgres, for the native Node/pm2 setup described in
+# LOCAL_LAN_DEPLOYMENT.md / PODMAN_DEPLOYMENT.md). Nothing about those was
+# changed — use whichever fits how you want to run things. This file does
+# not conflict with them as long as you're not running both at once (they'd
+# fight over port 5432/4000).
+#
+# Usage:
+#   docker compose -f docker-compose.full.yml up -d --build
+#
+# That's it — this single command builds the frontend, installs the backend,
+# starts Postgres, waits for it to be healthy, then runs the backend (which
+# applies the database schema and seeds the default Super Admin account
+# automatically before serving requests).
+#
+# All configuration lives in the ".env" file at the repo root (already
+# filled in with working defaults — see that file for what to change and
+# when).
+
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: pm_system_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-pm_system}
+    volumes:
+      - pm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-pm_system}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not exposed to the host by default (only the "app" service needs it,
+    # over the internal Docker network). Uncomment below if you want to
+    # connect to it directly with a DB tool like pgAdmin/TablePlus.
+    # ports:
+    #   - "5432:5432"
+
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: pm_system_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-pm_system}
+      # The Docker Compose service name "postgres" isn't "localhost", so the
+      # app's usual SSL auto-detection would wrongly assume a remote/managed
+      # database and try SSL — which this plain Postgres container doesn't
+      # support. This override forces it off for this internal connection.
+      DATABASE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      PORT: 4000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # Email (optional — see .env for details). Falls back to console
+      # logging if none of these are set, so the app runs fine without them.
+      APPS_SCRIPT_EMAIL_URL: ${APPS_SCRIPT_EMAIL_URL:-}
+      APPS_SCRIPT_SECRET: ${APPS_SCRIPT_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      APP_BRAND_NAME: ${APP_BRAND_NAME:-MWSS RO Project Workspace}
+      FROM_EMAIL: ${FROM_EMAIL:-}
+    ports:
+      - "${APP_PORT:-4000}:4000"
+    volumes:
+      # Uploaded files (attachments/avatars) live on your host disk here —
+      # same path the native (non-Docker) deployment already uses, so
+      # backups/restore instructions stay identical either way.
+      - ./backend/uploads:/app/backend/uploads
+
+volumes:
+  pm_pgdata:
