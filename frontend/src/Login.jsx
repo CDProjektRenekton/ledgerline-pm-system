@@ -307,7 +307,11 @@ export default function Login({ onAuthed, resetToken, verifyToken }) {
                   value={name} onChange={(e) => setName(e.target.value)} required />
               )}
 
-              {(mode==="login"||mode==="register"||mode==="forgot") && (
+              {mode==="login" && (
+                <input className="login-input" type="text" placeholder="Email address (or 'admin')"
+                  value={email} onChange={(e) => setEmail(e.target.value)} required />
+              )}
+              {(mode==="register"||mode==="forgot") && (
                 <input className="login-input" type="email" placeholder="Email address"
                   value={email} onChange={(e) => setEmail(e.target.value)} required />
               )}
